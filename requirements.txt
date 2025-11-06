@@ -1,0 +1,5 @@
+# requirements.txt
+tkcalendar
+reportlab
+win10toast
+Pillow
