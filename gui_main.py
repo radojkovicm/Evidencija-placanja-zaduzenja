@@ -351,8 +351,12 @@ class InvoiceDialog:
         ttk.Label(form_frame, text="Dobavljač:").grid(row=row, column=0, sticky=tk.W, pady=5)
         self.vendor_combo = ttk.Combobox(form_frame, width=37, state='readonly')
         vendors = self.db.get_all_vendors()
-        self.vendor_map = {v['name']: v['vendor_id'] for v in vendors}
-        self.vendor_combo['values'] = list(self.vendor_map.keys())
+        # vendor name može biti pod ključem 'name' ili 'vendor_name'; vendor id može biti 'vendor_id' ili 'id'
+        self.vendor_map = {
+            (v.get('name') or v.get('vendor_name') or '').strip(): (v.get('vendor_id') or v.get('id') or None)
+            for v in vendors
+        }
+        self.vendor_combo['values'] = [k for k in self.vendor_map.keys() if k]
         self.vendor_combo.grid(row=row, column=1, pady=5, sticky=tk.EW)
         row += 1
         
@@ -403,60 +407,95 @@ class InvoiceDialog:
     
     def load_invoice_data(self):
         invoice = self.db.get_invoice_by_id(self.id)
-        if invoice:
-            self.invoice_date_entry.set_date(datetime.strptime(invoice['invoice_date'], '%d.%m.%Y'))
-            self.due_date_entry.set_date(datetime.strptime(invoice['due_date'], '%d.%m.%Y'))
-            
-            # Postavi dobavljača
-            vendor = self.db.get_vendor_by_id(invoice['vendor_id'])
-            if vendor:
-                self.vendor_combo.set(vendor['name'])
-            
-            self.delivery_note_entry.insert(0, invoice['delivery_note_number'] or '')
-            self.amount_entry.insert(0, str(invoice['amount']))
-            self.notes_text.insert('1.0', invoice['notes'] or '')
-            
-            self.is_paid_var.set(invoice['is_paid'])
-            if invoice['is_paid'] and invoice['payment_date']:
-                self.payment_date_entry.config(state='normal')
-                self.payment_date_entry.set_date(datetime.strptime(invoice['payment_date'], '%d.%m.%Y'))
+        if not invoice:
+            return
+
+        self.invoice_date_entry.set_date(datetime.strptime(invoice['invoice_date'], '%d.%m.%Y'))
+        self.due_date_entry.set_date(datetime.strptime(invoice['due_date'], '%d.%m.%Y'))
+
+        # Pokušaj da dobijemo vendor po vendor_id; ako ne postoji, fallback na vendor_name
+        vid = invoice.get('vendor_id')
+        vendor = None
+        try:
+            if vid is not None:
+                try:
+                    vendor = self.db.get_vendor_by_id(int(vid))
+                except Exception:
+                    vendor = self.db.get_vendor_by_id(vid)
+        except Exception:
+            vendor = None
+
+        if vendor:
+            self.vendor_combo.set(vendor.get('name') or vendor.get('vendor_name') or '')
+        else:
+            # fallback na vendor_name iz invoice-a
+            self.vendor_combo.set(invoice.get('vendor_name') or '')
+
+        self.delivery_note_entry.delete(0, tk.END)
+        self.delivery_note_entry.insert(0, invoice.get('delivery_note_number') or '')
+        self.amount_entry.delete(0, tk.END)
+        self.amount_entry.insert(0, str(invoice.get('amount') or ''))
+        self.notes_text.delete('1.0', tk.END)
+        self.notes_text.insert('1.0', invoice.get('notes') or '')
+
+        self.is_paid_var.set(bool(invoice.get('is_paid')))
+        if invoice.get('is_paid') and invoice.get('payment_date'):
+            self.payment_date_entry.config(state='normal')
+            self.payment_date_entry.set_date(datetime.strptime(invoice['payment_date'], '%d.%m.%Y'))
+        else:
+            self.payment_date_entry.config(state='disabled')
     
     def save(self):
         # Validacija
         if not self.vendor_combo.get():
             messagebox.showerror("Greška", "Molim izaberite dobavljača.")
             return
-        
+
         if not self.delivery_note_entry.get().strip():
             messagebox.showerror("Greška", "Molim unesite broj otpremnice.")
             return
-        
+
         try:
             amount = float(self.amount_entry.get().strip().replace(',', '.'))
         except ValueError:
             messagebox.showerror("Greška", "Molim unesite validan iznos.")
             return
-        
+
         invoice_date = self.invoice_date_entry.get_date().strftime('%d.%m.%Y')
         due_date = self.due_date_entry.get_date().strftime('%d.%m.%Y')
-        vendor_id = self.vendor_map[self.vendor_combo.get()]
+        vendor_name = self.vendor_combo.get()
+        vendor_id = self.vendor_map.get(vendor_name)  # može biti None
         delivery_note = self.delivery_note_entry.get().strip()
         notes = self.notes_text.get('1.0', tk.END).strip()
         is_paid = 1 if self.is_paid_var.get() else 0
         payment_date = self.payment_date_entry.get_date().strftime('%d.%m.%Y') if is_paid else None
-        
+
+        invoice_data = {
+            'invoice_date': invoice_date,
+            'due_date': due_date,
+            'vendor_id': vendor_id,
+            'vendor_name': vendor_name,
+            'delivery_note_number': delivery_note,
+            'amount': amount,
+            'notes': notes
+        }
+
         try:
             if self.id:
-                self.db.update_invoice(self.id, invoice_date, due_date, vendor_id, 
-                                      delivery_note, amount, notes, is_paid, payment_date)
+                # update_invoice očekuje (invoice_id, invoice_data)
+                self.db.update_invoice(self.id, invoice_data)
+                # update is_paid status separately
+                if is_paid:
+                    self.db.mark_as_paid(self.id, payment_date)
+                else:
+                    self.db.mark_as_unpaid(self.id)
                 messagebox.showinfo("Uspeh", "Račun je uspešno izmenjen.")
             else:
-                id = self.db.add_invoice(invoice_date, due_date, vendor_id, delivery_note, amount, notes)
+                new_id = self.db.add_invoice(invoice_data)
                 if is_paid:
-                    # Ako je odmah označen kao plaćen
-                    self.db.mark_as_paid(id, payment_date)
+                    self.db.mark_as_paid(new_id, payment_date)
                 messagebox.showinfo("Uspeh", "Račun je uspešno dodat.")
-            
+
             self.callback()
             self.window.destroy()
         except Exception as e:
@@ -508,19 +547,57 @@ class ArchiveWindow:
     def load_archive(self):
         for item in self.tree.get_children():
             self.tree.delete(item)
+
+        # Pokušaj da dobijemo arhivirane fakture koristeći get_all_invoices(include_archived=True)
+        invoices = None
+        try:
+            invoices = self.db.get_all_invoices(include_archived=True)
+        except TypeError:
+            # fallback: možda metoda prima pozicioni arg
+            try:
+                invoices = self.db.get_all_invoices(True)
+            except Exception:
+                invoices = None
+        except Exception as e:
+            messagebox.showerror("Greška", f"Greška pri dohvatanju arhive: {e}")
+            return
+
+        if invoices is None:
+            messagebox.showerror("Greška", "Funkcija za dohvatanje arhiviranih računa nije dostupna u Database objektu.")
+            return
+
+        # Filtriraj SAMO arhivirane račune
+        archived_invoices = [inv for inv in invoices if inv.get('is_archived')]
         
-        invoices = self.db.get_archived_invoices()
-        for invoice in invoices:
+        for invoice in archived_invoices:
+            try:
+                inv = dict(invoice)
+            except Exception:
+                inv = invoice
+
+            invoice_date = inv.get('invoice_date') or inv.get('date') or ''
+            due_date = inv.get('due_date') or ''
+            vendor_name = inv.get('vendor_name') or inv.get('vendor') or ''
+            delivery_note = inv.get('delivery_note_number') or inv.get('delivery_note') or ''
+            amount = inv.get('amount') or 0.0
+            payment_date = inv.get('payment_date') or ''
+            notes = inv.get('notes') or ''
+
+            try:
+                amount_str = f"{float(amount):,.2f}"
+            except Exception:
+                amount_str = str(amount)
+
             self.tree.insert('', tk.END, values=(
-                invoice['invoice_date'],
-                invoice['due_date'],
-                invoice['vendor_name'],
-                invoice['delivery_note_number'],
-                f"{invoice['amount']:,.2f}",
-                invoice['payment_date'],
-                invoice['notes'] or ''
-            ), tags=(invoice['id'],))
-    
+                invoice_date,
+                due_date,
+                vendor_name,
+                delivery_note,
+                amount_str,
+                payment_date,
+                notes
+            ), tags=(inv.get('id') or inv.get('invoice_id') or ''))
+            
     def unarchive(self):
         selection = self.tree.selection()
         if not selection:
