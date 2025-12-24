@@ -1,51 +1,33 @@
-# gui_main.py
 import tkinter as tk
 from tkinter import ttk, messagebox
-from datetime import datetime, timedelta
+from datetime import datetime
 from tkcalendar import DateEntry
 from gui_settings import SettingsWindow
 from gui_vendors import VendorsWindow
 from pdf_generator import PDFGenerator
 import os
 
-class MainWindow:
-    def __init__(self, root, db, notification_manager):
-        self.root = root
+
+class ZaduzenjaTab:
+    """Tab za plaćanje zaduženja (dobavljači)"""
+    def __init__(self, parent, db, notification_manager):
+        self.parent = parent
         self.db = db
         self.notification_manager = notification_manager
         self.pdf_generator = PDFGenerator(db)
         
-        self.root.title("Evidencija Plaćanja Zaduženja")
-        self.root.geometry("1400x700")
-        
-        self.current_filter = "Svi"
-        self.search_text = ""
-        self.search_field = "Broj otpremnice"
+        self.all_invoices = []
         
         self.setup_ui()
         self.load_invoices()
-        
-        # Proveri notifikacije pri pokretanju
         self.check_notifications_on_startup()
     
     def setup_ui(self):
-        # Menu bar
-        menubar = tk.Menu(self.root)
-        self.root.config(menu=menubar)
-        
-        file_menu = tk.Menu(menubar, tearoff=0)
-        menubar.add_cascade(label="Fajl", menu=file_menu)
-        file_menu.add_command(label="Podešavanja", command=self.open_settings)
-        file_menu.add_separator()
-        file_menu.add_command(label="Izlaz", command=self.root.quit)
-        
-        data_menu = tk.Menu(menubar, tearoff=0)
-        menubar.add_cascade(label="Podaci", menu=data_menu)
-        data_menu.add_command(label="Dobavljači", command=self.open_vendors)
-        data_menu.add_command(label="Arhiva", command=self.open_archive)
+        # Menu bar (dodajemo ga na parent window ako treba)
+        # Ali pošto smo u tab-u, koristimo toolbar
         
         # Toolbar
-        toolbar = ttk.Frame(self.root)
+        toolbar = ttk.Frame(self.parent)
         toolbar.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
         
         ttk.Button(toolbar, text="Novi račun", command=self.add_invoice).pack(side=tk.LEFT, padx=2)
@@ -53,11 +35,16 @@ class MainWindow:
         ttk.Button(toolbar, text="Obriši", command=self.delete_invoice).pack(side=tk.LEFT, padx=2)
         ttk.Button(toolbar, text="Arhiviraj", command=self.archive_invoice).pack(side=tk.LEFT, padx=2)
         ttk.Separator(toolbar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=5)
+        ttk.Button(toolbar, text="Dobavljači", command=self.open_vendors).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="Arhiva", command=self.open_archive).pack(side=tk.LEFT, padx=2)
+        ttk.Separator(toolbar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=5)
         ttk.Button(toolbar, text="PDF Izveštaj", command=self.generate_pdf_report).pack(side=tk.LEFT, padx=2)
         ttk.Button(toolbar, text="Osveži", command=self.load_invoices).pack(side=tk.LEFT, padx=2)
+        ttk.Separator(toolbar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=5)
+        ttk.Button(toolbar, text="Podešavanja", command=self.open_settings).pack(side=tk.LEFT, padx=2)
         
         # Filter i search
-        filter_frame = ttk.Frame(self.root)
+        filter_frame = ttk.Frame(self.parent)
         filter_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
         
         ttk.Label(filter_frame, text="Filter:").pack(side=tk.LEFT, padx=5)
@@ -91,7 +78,7 @@ class MainWindow:
         self.sort_combo.pack(side=tk.LEFT, padx=5)
         
         # Container za tabelu
-        table_container = ttk.Frame(self.root)
+        table_container = ttk.Frame(self.parent)
         table_container.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
         # Tabela
@@ -115,24 +102,25 @@ class MainWindow:
         hsb = ttk.Scrollbar(table_container, orient=tk.HORIZONTAL, command=self.tree.xview)
         self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
         
-        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        vsb.pack(side=tk.RIGHT, fill=tk.Y)
-        hsb.pack(side=tk.BOTTOM, fill=tk.X)
+        self.tree.grid(row=0, column=0, sticky='nsew')
+        vsb.grid(row=0, column=1, sticky='ns')
+        hsb.grid(row=1, column=0, sticky='ew')
+        
+        table_container.grid_rowconfigure(0, weight=1)
+        table_container.grid_columnconfigure(0, weight=1)
         
         # Double click za izmenu
         self.tree.bind('<Double-1>', lambda e: self.edit_invoice())
         
         # Status bar
-        self.status_bar = ttk.Label(self.root, text="Spremno", relief=tk.SUNKEN, anchor=tk.W)
+        self.status_bar = ttk.Label(self.parent, text="Spremno", relief=tk.SUNKEN, anchor=tk.W)
         self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
     
     def load_invoices(self):
         for item in self.tree.get_children():
             self.tree.delete(item)
         
-        invoices = self.db.get_all_invoices(include_archived=False)
-        self.all_invoices = invoices  # Čuvaj sve račune za filtriranje
-        
+        self.all_invoices = self.db.get_all_invoices(include_archived=False)
         self.apply_filters()
         self.update_status_bar()
     
@@ -140,7 +128,6 @@ class MainWindow:
         for item in self.tree.get_children():
             self.tree.delete(item)
         
-        # Filtriraj
         filtered = self.all_invoices.copy()
         
         # Filter po statusu
@@ -211,9 +198,8 @@ class MainWindow:
                 if 0 <= days_until_due <= notification_days:
                     self.tree.item(item_id, tags=('due_soon', invoice['id']))
         
-        # Primeni boje
-        self.tree.tag_configure('paid', background='#90EE90')  # Svetlo zelena
-        self.tree.tag_configure('due_soon', background='#FFFF99')  # Svetlo žuta
+        self.tree.tag_configure('paid', background='#90EE90')
+        self.tree.tag_configure('due_soon', background='#FFFF99')
         
         self.update_status_bar()
     
@@ -227,7 +213,7 @@ class MainWindow:
         self.apply_filters()
     
     def add_invoice(self):
-        InvoiceDialog(self.root, self.db, None, self.load_invoices)
+        InvoiceDialog(self.parent, self.db, None, self.load_invoices)
     
     def edit_invoice(self):
         selection = self.tree.selection()
@@ -236,8 +222,8 @@ class MainWindow:
             return
         
         tags = self.tree.item(selection[0])['tags']
-        id = tags[-1]  # Poslednji tag je uvek id
-        InvoiceDialog(self.root, self.db, id, self.load_invoices)
+        invoice_id = tags[-1]
+        InvoiceDialog(self.parent, self.db, invoice_id, self.load_invoices)
     
     def delete_invoice(self):
         selection = self.tree.selection()
@@ -247,8 +233,8 @@ class MainWindow:
         
         if messagebox.askyesno("Potvrda", "Da li ste sigurni da želite da obrišete ovaj račun?"):
             tags = self.tree.item(selection[0])['tags']
-            id = tags[-1]
-            self.db.delete_invoice(id)
+            invoice_id = tags[-1]
+            self.db.delete_invoice(invoice_id)
             messagebox.showinfo("Uspeh", "Račun je uspešno obrisan.")
             self.load_invoices()
     
@@ -259,34 +245,33 @@ class MainWindow:
             return
         
         tags = self.tree.item(selection[0])['tags']
-        id = tags[-1]
-        invoice = self.db.get_invoice_by_id(id)
+        invoice_id = tags[-1]
+        invoice = self.db.get_invoice_by_id(invoice_id)
         
         if not invoice['is_paid']:
             messagebox.showwarning("Upozorenje", "Možete arhivirati samo plaćene račune.")
             return
         
         if messagebox.askyesno("Potvrda", "Da li želite da arhivirate ovaj račun?"):
-            self.db.archive_invoice(id)
+            self.db.archive_invoice(invoice_id)
             messagebox.showinfo("Uspeh", "Račun je uspešno arhiviran.")
             self.load_invoices()
     
     def open_archive(self):
-        ArchiveWindow(self.root, self.db, self.load_invoices)
+        ArchiveWindow(self.parent, self.db, self.load_invoices)
     
     def open_settings(self):
-        SettingsWindow(self.root, self.db)
+        SettingsWindow(self.parent, self.db)
     
     def open_vendors(self):
-        VendorsWindow(self.root, self.db)
+        VendorsWindow(self.parent, self.db, 'vendors')
     
     def generate_pdf_report(self):
-        # Uzmi trenutno prikazane račune
         displayed_invoices = []
         for item in self.tree.get_children():
             tags = self.tree.item(item)['tags']
-            id = tags[-1]
-            invoice = self.db.get_invoice_by_id(id)
+            invoice_id = tags[-1]
+            invoice = self.db.get_invoice_by_id(invoice_id)
             if invoice:
                 displayed_invoices.append(invoice)
         
@@ -298,41 +283,35 @@ class MainWindow:
             filename = self.pdf_generator.generate_invoice_report(displayed_invoices)
             messagebox.showinfo("Uspeh", f"PDF izveštaj je kreiran: {filename}")
             
-            # Otvori PDF
             if messagebox.askyesno("Otvori PDF", "Da li želite da otvorite PDF?"):
                 os.startfile(filename)
         except Exception as e:
             messagebox.showerror("Greška", f"Greška pri kreiranju PDF-a: {str(e)}")
     
-    # gui_main.py - ZAMENI check_notifications_on_startup metodu
-
     def check_notifications_on_startup(self):
-        """Prikaži samo Windows notifikaciju pri pokretanju (email šalje scheduler)"""
         due_invoices = self.notification_manager.check_due_invoices()
         if due_invoices:
-            # Samo Windows notifikacija
             self.notification_manager.show_windows_notification(due_invoices)
 
 
 class InvoiceDialog:
-    def __init__(self, parent, db, id, callback):
+    def __init__(self, parent, db, invoice_id, callback):
         self.window = tk.Toplevel(parent)
-        self.window.title("Novi račun" if id is None else "Izmeni račun")
+        self.window.title("Novi račun" if invoice_id is None else "Izmeni račun")
         self.window.geometry("600x500")
         self.window.transient(parent)
         self.window.grab_set()
         
         self.db = db
-        self.id = id
+        self.invoice_id = invoice_id
         self.callback = callback
         
         self.setup_ui()
         
-        if id:
+        if invoice_id:
             self.load_invoice_data()
     
     def setup_ui(self):
-        # Form
         form_frame = ttk.Frame(self.window, padding=20)
         form_frame.pack(fill=tk.BOTH, expand=True)
         
@@ -351,12 +330,8 @@ class InvoiceDialog:
         ttk.Label(form_frame, text="Dobavljač:").grid(row=row, column=0, sticky=tk.W, pady=5)
         self.vendor_combo = ttk.Combobox(form_frame, width=37, state='readonly')
         vendors = self.db.get_all_vendors()
-        # vendor name može biti pod ključem 'name' ili 'vendor_name'; vendor id može biti 'vendor_id' ili 'id'
-        self.vendor_map = {
-            (v.get('name') or v.get('vendor_name') or '').strip(): (v.get('vendor_id') or v.get('id') or None)
-            for v in vendors
-        }
-        self.vendor_combo['values'] = [k for k in self.vendor_map.keys() if k]
+        self.vendor_map = {v.get('name', ''): v.get('id') for v in vendors}
+        self.vendor_combo['values'] = list(self.vendor_map.keys())
         self.vendor_combo.grid(row=row, column=1, pady=5, sticky=tk.EW)
         row += 1
         
@@ -375,7 +350,6 @@ class InvoiceDialog:
         self.notes_text.grid(row=row, column=1, pady=5, sticky=tk.EW)
         row += 1
         
-        # Checkbox za plaćeno
         self.is_paid_var = tk.BooleanVar()
         self.paid_check = ttk.Checkbutton(form_frame, text="Plaćeno", variable=self.is_paid_var, command=self.on_paid_changed)
         self.paid_check.grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=10)
@@ -389,7 +363,6 @@ class InvoiceDialog:
         
         form_frame.columnconfigure(1, weight=1)
         
-        # Buttons
         button_frame = ttk.Frame(self.window)
         button_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=20, pady=10)
         
@@ -399,45 +372,30 @@ class InvoiceDialog:
     def on_paid_changed(self):
         if self.is_paid_var.get():
             self.payment_date_entry.config(state='normal')
-            # Postavi današnji datum ako nije već postavljen
-            if not self.id:
+            if not self.invoice_id:
                 self.payment_date_entry.set_date(datetime.now())
         else:
             self.payment_date_entry.config(state='disabled')
     
     def load_invoice_data(self):
-        invoice = self.db.get_invoice_by_id(self.id)
+        invoice = self.db.get_invoice_by_id(self.invoice_id)
         if not invoice:
             return
-
+        
         self.invoice_date_entry.set_date(datetime.strptime(invoice['invoice_date'], '%d.%m.%Y'))
         self.due_date_entry.set_date(datetime.strptime(invoice['due_date'], '%d.%m.%Y'))
-
-        # Pokušaj da dobijemo vendor po vendor_id; ako ne postoji, fallback na vendor_name
-        vid = invoice.get('vendor_id')
-        vendor = None
-        try:
-            if vid is not None:
-                try:
-                    vendor = self.db.get_vendor_by_id(int(vid))
-                except Exception:
-                    vendor = self.db.get_vendor_by_id(vid)
-        except Exception:
-            vendor = None
-
-        if vendor:
-            self.vendor_combo.set(vendor.get('name') or vendor.get('vendor_name') or '')
-        else:
-            # fallback na vendor_name iz invoice-a
-            self.vendor_combo.set(invoice.get('vendor_name') or '')
-
+        
+        self.vendor_combo.set(invoice.get('vendor_name', ''))
+        
         self.delivery_note_entry.delete(0, tk.END)
-        self.delivery_note_entry.insert(0, invoice.get('delivery_note_number') or '')
+        self.delivery_note_entry.insert(0, invoice.get('delivery_note_number', ''))
+        
         self.amount_entry.delete(0, tk.END)
-        self.amount_entry.insert(0, str(invoice.get('amount') or ''))
+        self.amount_entry.insert(0, str(invoice.get('amount', '')))
+        
         self.notes_text.delete('1.0', tk.END)
-        self.notes_text.insert('1.0', invoice.get('notes') or '')
-
+        self.notes_text.insert('1.0', invoice.get('notes', ''))
+        
         self.is_paid_var.set(bool(invoice.get('is_paid')))
         if invoice.get('is_paid') and invoice.get('payment_date'):
             self.payment_date_entry.config(state='normal')
@@ -446,30 +404,29 @@ class InvoiceDialog:
             self.payment_date_entry.config(state='disabled')
     
     def save(self):
-        # Validacija
         if not self.vendor_combo.get():
             messagebox.showerror("Greška", "Molim izaberite dobavljača.")
             return
-
+        
         if not self.delivery_note_entry.get().strip():
             messagebox.showerror("Greška", "Molim unesite broj otpremnice.")
             return
-
+        
         try:
             amount = float(self.amount_entry.get().strip().replace(',', '.'))
         except ValueError:
             messagebox.showerror("Greška", "Molim unesite validan iznos.")
             return
-
+        
         invoice_date = self.invoice_date_entry.get_date().strftime('%d.%m.%Y')
         due_date = self.due_date_entry.get_date().strftime('%d.%m.%Y')
         vendor_name = self.vendor_combo.get()
-        vendor_id = self.vendor_map.get(vendor_name)  # može biti None
+        vendor_id = self.vendor_map.get(vendor_name)
         delivery_note = self.delivery_note_entry.get().strip()
         notes = self.notes_text.get('1.0', tk.END).strip()
         is_paid = 1 if self.is_paid_var.get() else 0
         payment_date = self.payment_date_entry.get_date().strftime('%d.%m.%Y') if is_paid else None
-
+        
         invoice_data = {
             'invoice_date': invoice_date,
             'due_date': due_date,
@@ -479,23 +436,21 @@ class InvoiceDialog:
             'amount': amount,
             'notes': notes
         }
-
+        
         try:
-            if self.id:
-                # update_invoice očekuje (invoice_id, invoice_data)
-                self.db.update_invoice(self.id, invoice_data)
-                # update is_paid status separately
+            if self.invoice_id:
+                self.db.update_invoice(self.invoice_id, invoice_data)
                 if is_paid:
-                    self.db.mark_as_paid(self.id, payment_date)
+                    self.db.mark_as_paid(self.invoice_id, payment_date)
                 else:
-                    self.db.mark_as_unpaid(self.id)
+                    self.db.mark_as_unpaid(self.invoice_id)
                 messagebox.showinfo("Uspeh", "Račun je uspešno izmenjen.")
             else:
                 new_id = self.db.add_invoice(invoice_data)
                 if is_paid:
                     self.db.mark_as_paid(new_id, payment_date)
                 messagebox.showinfo("Uspeh", "Račun je uspešno dodat.")
-
+            
             self.callback()
             self.window.destroy()
         except Exception as e:
@@ -514,7 +469,6 @@ class ArchiveWindow:
         self.load_archive()
     
     def setup_ui(self):
-        # Toolbar
         toolbar = ttk.Frame(self.window)
         toolbar.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
         
@@ -522,7 +476,6 @@ class ArchiveWindow:
         ttk.Button(toolbar, text="Obriši", command=self.delete).pack(side=tk.LEFT, padx=2)
         ttk.Button(toolbar, text="Osveži", command=self.load_archive).pack(side=tk.LEFT, padx=2)
         
-        # Tabela
         columns = ('Datum fakture', 'Datum valute', 'Dobavljač', 'Br. otpremnice', 'Iznos (RSD)', 'Datum plaćanja', 'Napomena')
         self.tree = ttk.Treeview(self.window, columns=columns, show='headings', selectmode='browse')
         
@@ -537,7 +490,6 @@ class ArchiveWindow:
         self.tree.column('Datum plaćanja', width=120)
         self.tree.column('Napomena', width=300)
         
-        # Scrollbar
         scrollbar = ttk.Scrollbar(self.window, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscroll=scrollbar.set)
         
@@ -547,57 +499,21 @@ class ArchiveWindow:
     def load_archive(self):
         for item in self.tree.get_children():
             self.tree.delete(item)
-
-        # Pokušaj da dobijemo arhivirane fakture koristeći get_all_invoices(include_archived=True)
-        invoices = None
-        try:
-            invoices = self.db.get_all_invoices(include_archived=True)
-        except TypeError:
-            # fallback: možda metoda prima pozicioni arg
-            try:
-                invoices = self.db.get_all_invoices(True)
-            except Exception:
-                invoices = None
-        except Exception as e:
-            messagebox.showerror("Greška", f"Greška pri dohvatanju arhive: {e}")
-            return
-
-        if invoices is None:
-            messagebox.showerror("Greška", "Funkcija za dohvatanje arhiviranih računa nije dostupna u Database objektu.")
-            return
-
-        # Filtriraj SAMO arhivirane račune
+        
+        invoices = self.db.get_all_invoices(include_archived=True)
         archived_invoices = [inv for inv in invoices if inv.get('is_archived')]
         
         for invoice in archived_invoices:
-            try:
-                inv = dict(invoice)
-            except Exception:
-                inv = invoice
-
-            invoice_date = inv.get('invoice_date') or inv.get('date') or ''
-            due_date = inv.get('due_date') or ''
-            vendor_name = inv.get('vendor_name') or inv.get('vendor') or ''
-            delivery_note = inv.get('delivery_note_number') or inv.get('delivery_note') or ''
-            amount = inv.get('amount') or 0.0
-            payment_date = inv.get('payment_date') or ''
-            notes = inv.get('notes') or ''
-
-            try:
-                amount_str = f"{float(amount):,.2f}"
-            except Exception:
-                amount_str = str(amount)
-
             self.tree.insert('', tk.END, values=(
-                invoice_date,
-                due_date,
-                vendor_name,
-                delivery_note,
-                amount_str,
-                payment_date,
-                notes
-            ), tags=(inv.get('id') or inv.get('invoice_id') or ''))
-            
+                invoice.get('invoice_date', ''),
+                invoice.get('due_date', ''),
+                invoice.get('vendor_name', ''),
+                invoice.get('delivery_note_number', ''),
+                f"{invoice.get('amount', 0):,.2f}",
+                invoice.get('payment_date', ''),
+                invoice.get('notes', '')
+            ), tags=(invoice.get('id', ''),))
+    
     def unarchive(self):
         selection = self.tree.selection()
         if not selection:
@@ -605,8 +521,8 @@ class ArchiveWindow:
             return
         
         if messagebox.askyesno("Potvrda", "Da li želite da vratite ovaj račun iz arhive?"):
-            id = self.tree.item(selection[0])['tags'][0]
-            self.db.unarchive_invoice(id)
+            invoice_id = self.tree.item(selection[0])['tags'][0]
+            self.db.unarchive_invoice(invoice_id)
             messagebox.showinfo("Uspeh", "Račun je uspešno vraćen iz arhive.")
             self.load_archive()
             self.callback()
@@ -618,7 +534,7 @@ class ArchiveWindow:
             return
         
         if messagebox.askyesno("Potvrda", "Da li ste sigurni da želite da obrišete ovaj račun iz arhive?"):
-            id = self.tree.item(selection[0])['tags'][0]
-            self.db.delete_invoice(id)
+            invoice_id = self.tree.item(selection[0])['tags'][0]
+            self.db.delete_invoice(invoice_id)
             messagebox.showinfo("Uspeh", "Račun je uspešno obrisan.")
             self.load_archive()

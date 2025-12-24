@@ -3,3 +3,4 @@ tkcalendar
 reportlab
 win10toast
 Pillow
+pystray

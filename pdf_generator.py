@@ -1,312 +1,379 @@
-# pdf_generator.py - WITH LOGO AND COMPANY
-from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib import colors
 from reportlab.lib.units import cm
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER, TA_RIGHT, TA_LEFT
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 from datetime import datetime
 import os
-import sys
 
 
 class PDFGenerator:
     def __init__(self, db):
         self.db = db
+        
+        # Pokušaj registraciju fontova sa Unicode podrrškom
+        self.has_serbian_font = False
         self.font_name = 'Helvetica'
         self.font_name_bold = 'Helvetica-Bold'
-        self._register_font()
-
-    def _register_font(self):
-        """Automatically locate and register a font that supports Serbian characters."""
-        possible_fonts = [
-            ('Arial', 'arial.ttf', 'arialbd.ttf'),
-            ('Calibri', 'calibri.ttf', 'calibrib.ttf'),
-            ('Verdana', 'verdana.ttf', 'verdanab.ttf'),
-            ('Tahoma', 'tahoma.ttf', 'tahomabd.ttf'),
-            ('Times New Roman', 'times.ttf', 'timesbd.ttf'),
+        
+        # Pokušaj registraciju Arial fontova sa Windows-a (imaju Unicode podrsku za srpske znakove)
+        font_paths = [
+            ('C:\\Windows\\Fonts\\arial.ttf', 'C:\\Windows\\Fonts\\arialbd.ttf'),
+            ('C:\\Windows\\Fonts\\ARIAL.TTF', 'C:\\Windows\\Fonts\\ARIALBD.TTF'),
         ]
-
-        if sys.platform == 'win32':
-            fonts_dir = os.path.join(os.environ['WINDIR'], 'Fonts')
-        else:
-            fonts_dir = '/usr/share/fonts/truetype'
-
-        for font_name, regular_file, bold_file in possible_fonts:
+        
+        for regular_path, bold_path in font_paths:
             try:
-                regular_path = os.path.join(fonts_dir, regular_file)
-                bold_path = os.path.join(fonts_dir, bold_file)
-
-                if os.path.exists(regular_path):
-                    pdfmetrics.registerFont(TTFont(font_name, regular_path))
-                    self.font_name = font_name
-
-                if os.path.exists(bold_path):
-                    pdfmetrics.registerFont(TTFont(f"{font_name}-Bold", bold_path))
-                    self.font_name_bold = f"{font_name}-Bold"
-                else:
-                    self.font_name_bold = font_name
-
-                print(f"Registered font: {font_name}")
-                return
-            except Exception:
+                pdfmetrics.registerFont(TTFont('CustomArial', regular_path))
+                pdfmetrics.registerFont(TTFont('CustomArial-Bold', bold_path))
+                self.has_serbian_font = True
+                self.font_name = 'CustomArial'
+                self.font_name_bold = 'CustomArial-Bold'
+                break
+            except Exception as e:
                 continue
-
-        print("Default font (Helvetica) will be used.")
-
-    def _generate_sequential_filename(self, filename: str) -> str:
-        """
-        Produce the next available filename by appending a zero-padded counter.
-        Example: izvestaj_racuni0001.pdf, izvestaj_racuni0002.pdf, ...
-        """
-        directory = os.path.dirname(filename)
-        if not directory:
-            directory = os.getcwd()
-        else:
-            directory = os.path.abspath(directory)
-
-        base_name, extension = os.path.splitext(os.path.basename(filename))
-        if not extension:
-            extension = '.pdf'
-
-        counter = 1
-        while True:
-            candidate = os.path.join(directory, f"{base_name}{counter:04d}{extension}")
-            if not os.path.exists(candidate):
-                return candidate
-            counter += 1
-
-    def generate_invoice_report(self, invoices, filename: str = "izvestaj_racuni.pdf"):
-        """Generate a PDF report with invoice data."""
-        if filename == "izvestaj_racuni.pdf":
-            filename = self._generate_sequential_filename(filename)
-
-        settings = self.db.get_settings()
-
-        doc = SimpleDocTemplate(
-            filename,
-            pagesize=A4,
-            rightMargin=1 * cm,
-            leftMargin=1 * cm,
-            topMargin=1 * cm,
-            bottomMargin=1 * cm,
-        )
-
-        elements = []
+    
+    def _get_styles(self):
         styles = getSampleStyleSheet()
-
-        # Custom styles
+        
+        # Uvek koristi DejaVuSans ako je dostupan, inače Helvetica
+        font = self.font_name
+        font_bold = self.font_name_bold
+        
         title_style = ParagraphStyle(
             'CustomTitle',
             parent=styles['Heading1'],
-            fontName=self.font_name_bold,
-            fontSize=16,
-            textColor=colors.HexColor('#3333'),
-            spaceAfter=12,
+            fontName=font_bold,
+            fontSize=18,
             alignment=TA_CENTER,
+            spaceAfter=20
         )
-
+        
+        heading_style = ParagraphStyle(
+            'CustomHeading',
+            parent=styles['Heading2'],
+            fontName=font_bold,
+            fontSize=14,
+            spaceAfter=12
+        )
+        
         normal_style = ParagraphStyle(
             'CustomNormal',
             parent=styles['Normal'],
-            fontName=self.font_name,
-            fontSize=10,
+            fontName=font,
+            fontSize=10
         )
-
-        company_style = ParagraphStyle(
-            'CompanyStyle',
-            parent=styles['Normal'],
-            fontName=self.font_name_bold,
-            fontSize=12,
-            textColor=colors.HexColor('#3333'),
-        )
-
-        date_style = ParagraphStyle(
-            'DateStyle',
-            parent=styles['Normal'],
-            fontName=self.font_name,
-            fontSize=10,
-            alignment=TA_RIGHT,
-        )
-
-        summary_style = ParagraphStyle(
-            'SummaryStyle',
-            parent=styles['Normal'],
-            fontName=self.font_name_bold,
-            fontSize=10,
-            alignment=TA_RIGHT,
-        )
-
-        # Header - logo on the left, company info on the right
-        logo_path = settings.get('logo_path')
-        company_name = settings.get('company_name', 'Moja Firma')
-        company_address = settings.get('company_address', '')
-
-        header_data = []
-
-        if logo_path and os.path.exists(logo_path):
-            try:
-                logo = Image(logo_path, width=4 * cm, height=4 * cm)
-                company_info = f"<b>{company_name}</b><br/>{company_address}"
-                company_para = Paragraph(company_info, company_style)
-                header_data = [[logo, company_para]]
-
-                header_table = Table(header_data, colWidths=[5 * cm, 14 * cm])
-                header_table.setStyle(
-                    TableStyle(
-                        [
-                            ('ALIGN', (0, 0), (0, 0), 'LEFT'),
-                            ('ALIGN', (1, 0), (1, 0), 'RIGHT'),
-                            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                        ]
-                    )
-                )
-                elements.append(header_table)
-            except Exception as e:
-                print(f"Error loading logo: {e}")
-                company_para = Paragraph(f"<b>{company_name}</b><br/>{company_address}", company_style)
-                elements.append(company_para)
+        
+        return title_style, heading_style, normal_style
+    
+    def _get_font(self, bold=False):
+        """Vraća odgovarajući font - DejaVuSans ako je dostupan, inače Helvetica"""
+        if bold:
+            return self.font_name_bold
+        return self.font_name
+    
+    # ==================== RAČUNI DOBAVLJAČA ====================
+    def generate_invoice_report(self, invoices):
+        """PDF izveštaj za račune dobavljača"""
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f'racuni_izvestaj_{timestamp}.pdf'
+        
+        doc = SimpleDocTemplate(filename, pagesize=A4)
+        elements = []
+        
+        title_style, heading_style, normal_style = self._get_styles()
+        
+        # Naslov
+        elements.append(Paragraph("Izveštaj o računima dobavljača", title_style))
+        elements.append(Paragraph(f"Datum: {datetime.now().strftime('%d.%m.%Y %H:%M')}", normal_style))
+        elements.append(Spacer(1, 0.5*cm))
+        
+        # Tabela
+        data = [['Datum\nfakture', 'Datum\nvalute', 'Dobavljač', 'Br.\notpremnice', 'Iznos\n(RSD)', 'Status', 'Datum\nplaćanja']]
+        
+        for inv in invoices:
+            data.append([
+                inv['invoice_date'],
+                inv['due_date'],
+                inv['vendor_name'],
+                inv['delivery_note_number'],
+                f"{inv['amount']:,.2f}",
+                "Plaćeno" if inv['is_paid'] else "Neplaćeno",
+                inv['payment_date'] if inv['payment_date'] else "-"
+            ])
+        
+        table = Table(data, colWidths=[2.5*cm, 2.5*cm, 4*cm, 2.5*cm, 2.5*cm, 2*cm, 2.5*cm])
+        table.setStyle(TableStyle([
+            ('FONTNAME', (0, 0), (-1, -1), self._get_font()),
+            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), self._get_font(bold=True)),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('FONTSIZE', (0, 1), (-1, -1), 8),
+        ]))
+        
+        elements.append(table)
+        elements.append(Spacer(1, 0.5*cm))
+        
+        # Statistika
+        total = sum(inv['amount'] for inv in invoices)
+        paid = sum(inv['amount'] for inv in invoices if inv['is_paid'])
+        unpaid = total - paid
+        
+        stats_text = f"<b>Ukupno:</b> {total:,.2f} RSD | <b>Plaćeno:</b> {paid:,.2f} RSD | <b>Neplaćeno:</b> {unpaid:,.2f} RSD"
+        elements.append(Paragraph(stats_text, normal_style))
+        
+        doc.build(elements)
+        return filename
+    
+    # ==================== PREDRAČUNI ====================
+    def generate_proforma_pdf(self, proforma_id):
+        """PDF predračun za kupca"""
+        proforma = self.db.get_proforma_by_id(proforma_id)
+        items = self.db.get_proforma_items(proforma_id)
+        customer = self.db.get_customer_by_id(proforma['customer_id']) if proforma['customer_id'] else None
+        
+        print(f"DEBUG: Predračun {proforma['proforma_number']} - stavki: {len(items)}")
+        if items:
+            for item in items[:3]:
+                print(f"  - {item.get('article_name', 'N/A')}: {item.get('quantity', 0)} x {item.get('price', 0)}")
         else:
-            company_para = Paragraph(f"<b>{company_name}</b><br/>{company_address}", company_style)
-            elements.append(company_para)
-
-        elements.append(Spacer(1, 0.8 * cm))
-
-        # Title
-        elements.append(Paragraph("IZVEŠTAJ O RAČUNIMA", title_style))
-
-        # Report date
-        elements.append(Paragraph(f"Datum: {datetime.now().strftime('%d.%m.%Y')}", date_style))
-        elements.append(Spacer(1, 0.5 * cm))
-
-        # Invoice table
-        if invoices:
-            header_style = ParagraphStyle(
-                'HeaderStyle',
-                parent=normal_style,
-                fontName=self.font_name_bold,
-                fontSize=8,
-                alignment=TA_CENTER,
-            )
-
-            data = [
-                [
-                    Paragraph('<b>Datum<br/>fakture</b>', header_style),
-                    Paragraph('<b>Datum<br/>valute</b>', header_style),
-                    Paragraph('<b>Dobavljač</b>', header_style),
-                    Paragraph('<b>Br.<br/>otpremnice</b>', header_style),
-                    Paragraph('<b>Iznos<br/>(RSD)</b>', header_style),
-                    Paragraph('<b>Status</b>', header_style),
-                    Paragraph('<b>Datum<br/>plaćanja</b>', header_style),
-                    Paragraph('<b>Napomena</b>', header_style),
-                ]
-            ]
-
-            cell_style = ParagraphStyle(
-                'CellStyle',
-                parent=normal_style,
-                fontName=self.font_name,
-                fontSize=7,
-                alignment=TA_LEFT,
-            )
-            cell_style_center = ParagraphStyle(
-                'CellStyleCenter',
-                parent=normal_style,
-                fontName=self.font_name,
-                fontSize=7,
-                alignment=TA_CENTER,
-            )
-            cell_style_right = ParagraphStyle(
-                'CellStyleRight',
-                parent=normal_style,
-                fontName=self.font_name,
-                fontSize=7,
-                alignment=TA_RIGHT,
-            )
-
-            row_colors = []
-
-            for idx, invoice in enumerate(invoices):
-                status = "Plaćeno" if invoice['is_paid'] else "Neplaćeno"
-                payment_date = invoice['payment_date'] if invoice['payment_date'] else "-"
-                notes = invoice['notes'] if invoice['notes'] else "-"
-
-                if len(notes) > 80:
-                    notes = notes[:77] + "..."
-
-                data.append(
-                    [
-                        Paragraph(invoice['invoice_date'], cell_style_center),
-                        Paragraph(invoice['due_date'], cell_style_center),
-                        Paragraph(invoice['vendor_name'] or '-', cell_style),
-                        Paragraph(invoice['delivery_note_number'] or '-', cell_style_center),
-                        Paragraph(f"{invoice['amount']:,.2f}", cell_style_right),
-                        Paragraph(status, cell_style_center),
-                        Paragraph(payment_date, cell_style_center),
-                        Paragraph(notes, cell_style),
-                    ]
-                )
-
-                if invoice['is_paid']:
-                    row_colors.append((idx + 1, colors.lightgreen))
-                else:
-                    due_date = datetime.strptime(invoice['due_date'], '%d.%m.%Y').date()
-                    today = datetime.now().date()
-                    days_until_due = (due_date - today).days
-                    notification_days = settings.get('notification_days', 7)
-
-                    if 0 <= days_until_due <= notification_days:
-                        row_colors.append((idx + 1, colors.yellow))
-                    else:
-                        row_colors.append((idx + 1, colors.beige))
-
-            table = Table(
-                data,
-                colWidths=[
-                    1.7 * cm,  # Invoice date
-                    1.7 * cm,  # Due date
-                    2.8 * cm,  # Vendor
-                    2.8 * cm,  # Delivery note number (wider)
-                    1.8 * cm,  # Amount (narrower)
-                    1.7 * cm,  # Status
-                    1.7 * cm,  # Payment date (narrower)
-                    4.8 * cm,  # Notes
-                ],
-            )
-
-            table_style = [
-                ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                ('FONTNAME', (0, 0), (-1, 0), self.font_name_bold),
-                ('FONTSIZE', (0, 0), (-1, 0), 8),
-                ('FONTSIZE', (0, 1), (-1, -1), 7),
-                ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
-                ('TOPPADDING', (0, 1), (-1, -1), 4),
-                ('BOTTOMPADDING', (0, 1), (-1, -1), 4),
-                ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
-            ]
-
-            for row_idx, color in row_colors:
-                table_style.append(('BACKGROUND', (0, row_idx), (-1, row_idx), color))
-
-            table.setStyle(TableStyle(table_style))
-            elements.append(table)
-
-            # Totals
-            total_amount = sum(inv['amount'] for inv in invoices)
-            total_paid = sum(inv['amount'] for inv in invoices if inv['is_paid'])
-            total_unpaid = total_amount - total_paid
-
-            elements.append(Spacer(1, 0.5 * cm))
-            elements.append(Paragraph(f"<b>Ukupno:</b> {total_amount:,.2f} RSD", summary_style))
-            elements.append(Paragraph(f"<b>Plaćeno:</b> {total_paid:,.2f} RSD", summary_style))
-            elements.append(Paragraph(f"<b>Neplaćeno:</b> {total_unpaid:,.2f} RSD", summary_style))
+            print(f"  ⚠️  NEMA STAVKI U LISTI!")
+        
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f'predracun_{proforma["proforma_number"]}_{timestamp}.pdf'
+        
+        doc = SimpleDocTemplate(filename, pagesize=A4, topMargin=2*cm, bottomMargin=2*cm)
+        elements = []
+        
+        title_style, heading_style, normal_style = self._get_styles()
+        
+        # Header
+        elements.append(Paragraph(f"PREDRAČUN BR. {proforma['proforma_number']}", title_style))
+        elements.append(Spacer(1, 0.3*cm))
+        
+        # Info blokovi
+        info_data = [
+            ['Datum izdavanja:', proforma['invoice_date'], '', 'Status plaćanja:', proforma['payment_status']],
+        ]
+        
+        if customer:
+            info_data.append(['Kupac:', customer['name'], '', 'Telefon:', customer.get('phone', '-')])
+            info_data.append(['Adresa:', customer.get('address', '-'), '', 'PIB:', customer.get('pib', '-')])
         else:
-            elements.append(Paragraph("Nema računa za prikaz.", normal_style))
-
+            info_data.append(['Kupac:', proforma['customer_name'], '', '', ''])
+        
+        info_table = Table(info_data, colWidths=[3*cm, 5*cm, 1*cm, 3*cm, 5*cm])
+        info_table.setStyle(TableStyle([
+            ('FONTNAME', (0, 0), (-1, -1), self._get_font()),
+            ('FONTNAME', (0, 0), (0, -1), self._get_font(bold=True)),
+            ('FONTNAME', (3, 0), (3, -1), self._get_font(bold=True)),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ]))
+        elements.append(info_table)
+        elements.append(Spacer(1, 0.8*cm))
+        
+        # Stavke
+        elements.append(Paragraph("STAVKE PREDRAČUNA", heading_style))
+        elements.append(Spacer(1, 0.3*cm))
+        
+        item_data = [['Rb.', 'Šifra', 'Naziv', 'Kol.', 'JM', 'Cena', 'Popust %', 'Ukupno', 'Status']]
+        
+        print(f"DEBUG: Processing {len(items)} items...")
+        for idx, item in enumerate(items, 1):
+            print(f"  Item {idx}: {item['article_name']}")
+            item_data.append([
+                str(idx),
+                item['article_code'],
+                item['article_name'],
+                f"{item['quantity']:.2f}",
+                item['unit'],
+                f"{item['price']:,.2f}",
+                f"{item['discount']:.1f}",
+                f"{item['total']:,.2f}",
+                "✓" if item['is_paid'] else "-"
+            ])
+        
+        print(f"DEBUG: Final item_data rows: {len(item_data)} (header + {len(item_data)-1} items)")
+        
+        # Ako nema stavki, dodaj praznu stavku sa porukom
+        if len(item_data) == 1:
+            print("⚠️  NEMA STAVKI - dodajem praznu stavku sa porukom")
+            item_data.append(['–', '–', 'Nema stavki u predračunu', '–', '–', '–', '–', '–', '–'])
+        
+        item_table = Table(item_data, colWidths=[1*cm, 1.5*cm, 5*cm, 1.5*cm, 1.5*cm, 2*cm, 1.5*cm, 2*cm, 1.5*cm])
+        item_table.setStyle(TableStyle([
+            ('FONTNAME', (0, 0), (-1, -1), self._get_font()),
+            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), self._get_font(bold=True)),
+            ('FONTSIZE', (0, 0), (-1, 0), 9),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.white),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('FONTSIZE', (0, 1), (-1, -1), 8),
+        ]))
+        elements.append(item_table)
+        elements.append(Spacer(1, 0.5*cm))
+        
+        # Ukupno
+        total_data = [
+            ['Ukupan iznos:', f"{proforma['total_amount']:,.2f} RSD"],
+            ['Plaćeno:', f"{proforma['paid_amount']:,.2f} RSD"],
+            ['Preostalo:', f"{proforma['total_amount'] - proforma['paid_amount']:,.2f} RSD"]
+        ]
+        
+        total_table = Table(total_data, colWidths=[14*cm, 4*cm])
+        total_table.setStyle(TableStyle([
+            ('ALIGN', (0, 0), (0, -1), 'RIGHT'),
+            ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
+            ('FONTNAME', (0, 0), (-1, -1), self._get_font(bold=True)),
+            ('FONTSIZE', (0, 0), (-1, -1), 11),
+            ('LINEABOVE', (0, 0), (-1, 0), 1, colors.black),
+            ('LINEABOVE', (0, -1), (-1, -1), 2, colors.black),
+        ]))
+        elements.append(total_table)
+        elements.append(Spacer(1, 1.5*cm))
+        
+        # Potpisi
+        sig_data = [
+            ['_____________________', '', '_____________________'],
+            ['Prodavac', '', 'Kupac']
+        ]
+        
+        sig_table = Table(sig_data, colWidths=[6*cm, 4*cm, 6*cm])
+        sig_table.setStyle(TableStyle([
+            ('FONTNAME', (0, 0), (-1, -1), self._get_font()),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+        ]))
+        elements.append(sig_table)
+        
+        if proforma.get('notes'):
+            elements.append(Spacer(1, 0.5*cm))
+            elements.append(Paragraph(f"<b>Napomena:</b> {proforma['notes']}", normal_style))
+        
+        doc.build(elements)
+        return filename
+    
+    # ==================== KOMUNALIJE ====================
+    def generate_utility_report(self, bills):
+        """PDF izveštaj za komunalije"""
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f'komunalije_izvestaj_{timestamp}.pdf'
+        
+        doc = SimpleDocTemplate(filename, pagesize=A4)
+        elements = []
+        
+        title_style, heading_style, normal_style = self._get_styles()
+        
+        # Naslov
+        elements.append(Paragraph("Izveštaj o komunalijama", title_style))
+        elements.append(Paragraph(f"Datum: {datetime.now().strftime('%d.%m.%Y %H:%M')}", normal_style))
+        elements.append(Spacer(1, 0.5*cm))
+        
+        # Tabela
+        data = [['Datum\nračuna', 'Tip\nkomunalije', 'Iznos\n(RSD)', 'Plaćeno\n(RSD)', 'Status', 'Datum\nplaćanja']]
+        
+        for bill in bills:
+            data.append([
+                bill['bill_date'],
+                bill['utility_type_name'],
+                f"{bill['amount']:,.2f}",
+                f"{bill['paid_amount']:,.2f}",
+                bill['payment_status'],
+                bill['payment_date'] if bill['payment_date'] else "-"
+            ])
+        
+        table = Table(data, colWidths=[2.5*cm, 4*cm, 3*cm, 3*cm, 2.5*cm, 2.5*cm])
+        table.setStyle(TableStyle([
+            ('FONTNAME', (0, 0), (-1, -1), self._get_font()),
+            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), self._get_font(bold=True)),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('FONTSIZE', (0, 1), (-1, -1), 9),
+        ]))
+        
+        elements.append(table)
+        elements.append(Spacer(1, 0.5*cm))
+        
+        # Statistika
+        total = sum(bill['amount'] for bill in bills)
+        paid = sum(bill['paid_amount'] for bill in bills)
+        unpaid = total - paid
+        
+        stats_text = f"<b>Ukupno:</b> {total:,.2f} RSD | <b>Plaćeno:</b> {paid:,.2f} RSD | <b>Neplaćeno:</b> {unpaid:,.2f} RSD"
+        elements.append(Paragraph(stats_text, normal_style))
+        
+        doc.build(elements)
+        return filename
+    
+    # ==================== PROMET ====================
+    def generate_revenue_report(self, entries):
+        """PDF izveštaj za kontrolu prometa"""
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f'promet_izvestaj_{timestamp}.pdf'
+        
+        doc = SimpleDocTemplate(filename, pagesize=A4)
+        elements = []
+        
+        title_style, heading_style, normal_style = self._get_styles()
+        
+        # Naslov
+        elements.append(Paragraph("Izveštaj o prometu", title_style))
+        elements.append(Paragraph(f"Datum: {datetime.now().strftime('%d.%m.%Y %H:%M')}", normal_style))
+        elements.append(Spacer(1, 0.5*cm))
+        
+        # Tabela
+        data = [['Datum\nunosa', 'Period\nOD', 'Period\nDO', 'Iznos prometa\n(RSD)', 'Napomena']]
+        
+        for entry in entries:
+            data.append([
+                entry['entry_date'],
+                entry['date_from'],
+                entry['date_to'],
+                f"{entry['amount']:,.2f}",
+                entry['notes'] if entry['notes'] else "-"
+            ])
+        
+        table = Table(data, colWidths=[2.5*cm, 2.5*cm, 2.5*cm, 3.5*cm, 6*cm])
+        table.setStyle(TableStyle([
+            ('FONTNAME', (0, 0), (-1, -1), self._get_font()),
+            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (3, -1), 'CENTER'),
+            ('ALIGN', (4, 0), (4, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, 0), self._get_font(bold=True)),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('FONTSIZE', (0, 1), (-1, -1), 9),
+        ]))
+        
+        elements.append(table)
+        elements.append(Spacer(1, 0.5*cm))
+        
+        # Statistika
+        total_revenue = sum(entry['amount'] for entry in entries)
+        avg_revenue = total_revenue / len(entries) if entries else 0
+        
+        stats_text = f"<b>Ukupan promet:</b> {total_revenue:,.2f} RSD | <b>Prosečan promet:</b> {avg_revenue:,.2f} RSD | <b>Broj unosa:</b> {len(entries)}"
+        elements.append(Paragraph(stats_text, normal_style))
+        
         doc.build(elements)
         return filename
