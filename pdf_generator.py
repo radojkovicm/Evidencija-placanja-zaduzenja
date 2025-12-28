@@ -81,7 +81,9 @@ class PDFGenerator:
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         filename = f'racuni_izvestaj_{timestamp}.pdf'
         
-        doc = SimpleDocTemplate(filename, pagesize=A4)
+        # Landscape orijentacija zbog više kolona
+        from reportlab.lib.pagesizes import landscape
+        doc = SimpleDocTemplate(filename, pagesize=landscape(A4))
         elements = []
         
         title_style, heading_style, normal_style = self._get_styles()
@@ -91,48 +93,85 @@ class PDFGenerator:
         elements.append(Paragraph(f"Datum: {datetime.now().strftime('%d.%m.%Y %H:%M')}", normal_style))
         elements.append(Spacer(1, 0.5*cm))
         
-        # Tabela
-        data = [['Datum\nfakture', 'Datum\nvalute', 'Dobavljač', 'Br.\notpremnice', 'Iznos\n(RSD)', 'Status', 'Datum\nplaćanja']]
+        # Tabela sa SVIM kolonama
+        data = [[
+            'Datum\nfakture', 
+            'Datum\nvalute', 
+            'Dobavljač', 
+            'Br.\notpremnice', 
+            'Iznos\n(RSD)', 
+            'Plaćeno\n(RSD)', 
+            'Preostalo\n(RSD)', 
+            'Status', 
+            'Posl.\nuplata'
+        ]]
         
         for inv in invoices:
+            # Koristi nove ključeve koje si dodao u gui_zaduzenja.py
+            total_paid = inv.get('total_paid', 0)
+            remaining = inv.get('remaining', 0)
+            status = inv.get('payment_status', 'Neplaćeno')
+            
+            # Datum poslednje uplate
+            last_payment = self.db.get_last_payment_date(inv['id']) if hasattr(self.db, 'get_last_payment_date') else "-"
+            
             data.append([
                 inv['invoice_date'],
                 inv['due_date'],
-                inv['vendor_name'],
+                inv['vendor_name'][:20],  # Skrati ime ako je predugačko
                 inv['delivery_note_number'],
                 f"{inv['amount']:,.2f}",
-                "Plaćeno" if inv['is_paid'] else "Neplaćeno",
-                inv['payment_date'] if inv['payment_date'] else "-"
+                f"{total_paid:,.2f}",
+                f"{remaining:,.2f}",
+                status,
+                last_payment if last_payment else "-"
             ])
         
-        table = Table(data, colWidths=[2.5*cm, 2.5*cm, 4*cm, 2.5*cm, 2.5*cm, 2*cm, 2.5*cm])
+        # Prilagođene širine kolona za landscape
+        table = Table(data, colWidths=[2*cm, 2*cm, 4*cm, 2.5*cm, 2.3*cm, 2.3*cm, 2.3*cm, 2*cm, 2*cm])
         table.setStyle(TableStyle([
             ('FONTNAME', (0, 0), (-1, -1), self._get_font()),
             ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
             ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ('FONTNAME', (0, 0), (-1, 0), self._get_font(bold=True)),
-            ('FONTSIZE', (0, 0), (-1, 0), 10),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('FONTSIZE', (0, 0), (-1, 0), 9),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
             ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
             ('GRID', (0, 0), (-1, -1), 1, colors.black),
             ('FONTSIZE', (0, 1), (-1, -1), 8),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ]))
         
         elements.append(table)
         elements.append(Spacer(1, 0.5*cm))
         
-        # Statistika
+        # Ažurirana statistika
         total = sum(inv['amount'] for inv in invoices)
-        paid = sum(inv['amount'] for inv in invoices if inv['is_paid'])
-        unpaid = total - paid
+        total_paid_sum = sum(inv.get('total_paid', 0) for inv in invoices)
+        remaining_sum = sum(inv.get('remaining', 0) for inv in invoices)
         
-        stats_text = f"<b>Ukupno:</b> {total:,.2f} RSD | <b>Plaćeno:</b> {paid:,.2f} RSD | <b>Neplaćeno:</b> {unpaid:,.2f} RSD"
+        # Brojači statusa
+        status_counts = {
+            'Neplaćeno': sum(1 for inv in invoices if inv.get('payment_status', 'Neplaćeno') == 'Neplaćeno'),
+            'Delimično': sum(1 for inv in invoices if inv.get('payment_status', 'Neplaćeno') == 'Delimično'),
+            'Plaćeno': sum(1 for inv in invoices if inv.get('payment_status', 'Neplaćeno') == 'Plaćeno')
+        }
+        
+        stats_text = (
+            f"<b>Ukupan iznos:</b> {total:,.2f} RSD | "
+            f"<b>Plaćeno:</b> {total_paid_sum:,.2f} RSD | "
+            f"<b>Preostalo:</b> {remaining_sum:,.2f} RSD<br/>"
+            f"<b>Računi:</b> Neplaćeno: {status_counts['Neplaćeno']} | "
+            f"Delimično: {status_counts['Delimično']} | "
+            f"Plaćeno: {status_counts['Plaćeno']}"
+        )
         elements.append(Paragraph(stats_text, normal_style))
         
         doc.build(elements)
         return filename
     
+    # ==================== PREDRAČUNI ====================
     # ==================== PREDRAČUNI ====================
     def generate_proforma_pdf(self, proforma_id):
         """PDF predračun za kupca"""
@@ -140,12 +179,11 @@ class PDFGenerator:
         items = self.db.get_proforma_items(proforma_id)
         customer = self.db.get_customer_by_id(proforma['customer_id']) if proforma['customer_id'] else None
         
-        print(f"DEBUG: Predračun {proforma['proforma_number']} - stavki: {len(items)}")
-        if items:
-            for item in items[:3]:
-                print(f"  - {item.get('article_name', 'N/A')}: {item.get('quantity', 0)} x {item.get('price', 0)}")
-        else:
-            print(f"  ⚠️  NEMA STAVKI U LISTI!")
+        # Izračunaj plaćeno i preostalo iz payments tabele
+        total_paid = self.db.get_total_paid_proforma(proforma_id)
+        remaining = proforma['total_amount'] - total_paid
+        status = self.db.get_payment_status_proforma(proforma_id)
+        last_payment_date = self.db.get_last_payment_date_proforma(proforma_id)
         
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         filename = f'predracun_{proforma["proforma_number"]}_{timestamp}.pdf'
@@ -161,12 +199,12 @@ class PDFGenerator:
         
         # Info blokovi
         info_data = [
-            ['Datum izdavanja:', proforma['invoice_date'], '', 'Status plaćanja:', proforma['payment_status']],
+            ['Datum izdavanja:', proforma['invoice_date'], '', 'Status plaćanja:', status],
         ]
         
         if customer:
             info_data.append(['Kupac:', customer['name'], '', 'Telefon:', customer.get('phone', '-')])
-            info_data.append(['Adresa:', customer.get('address', '-'), '', 'PIB:', customer.get('pib', '-')])
+            info_data.append(['Adresa:', customer.get('address', '-'), '', 'Br. lične karte:', customer.get('id_card_number', '-')])
         else:
             info_data.append(['Kupac:', proforma['customer_name'], '', '', ''])
         
@@ -185,11 +223,10 @@ class PDFGenerator:
         elements.append(Paragraph("STAVKE PREDRAČUNA", heading_style))
         elements.append(Spacer(1, 0.3*cm))
         
-        item_data = [['Rb.', 'Šifra', 'Naziv', 'Kol.', 'JM', 'Cena', 'Popust %', 'Ukupno', 'Status']]
+        # Tabela BEZ "Status" kolone, šira kolona za naziv
+        item_data = [['Rb.', 'Šifra', 'Naziv artikla', 'Količina', 'JM', 'Cena', 'Popust %', 'Ukupno']]
         
-        print(f"DEBUG: Processing {len(items)} items...")
         for idx, item in enumerate(items, 1):
-            print(f"  Item {idx}: {item['article_name']}")
             item_data.append([
                 str(idx),
                 item['article_code'],
@@ -198,23 +235,21 @@ class PDFGenerator:
                 item['unit'],
                 f"{item['price']:,.2f}",
                 f"{item['discount']:.1f}",
-                f"{item['total']:,.2f}",
-                "✓" if item['is_paid'] else "-"
+                f"{item['total']:,.2f}"
             ])
-        
-        print(f"DEBUG: Final item_data rows: {len(item_data)} (header + {len(item_data)-1} items)")
         
         # Ako nema stavki, dodaj praznu stavku sa porukom
         if len(item_data) == 1:
-            print("⚠️  NEMA STAVKI - dodajem praznu stavku sa porukom")
-            item_data.append(['–', '–', 'Nema stavki u predračunu', '–', '–', '–', '–', '–', '–'])
+            item_data.append(['–', '–', 'Nema stavki u predračunu', '–', '–', '–', '–', '–'])
         
-        item_table = Table(item_data, colWidths=[1*cm, 1.5*cm, 5*cm, 1.5*cm, 1.5*cm, 2*cm, 1.5*cm, 2*cm, 1.5*cm])
+        # Šire kolone: naziv dobija više prostora (6.5cm umesto 5cm)
+        item_table = Table(item_data, colWidths=[1*cm, 1.5*cm, 6.5*cm, 1.5*cm, 1.2*cm, 2*cm, 1.5*cm, 2.3*cm])
         item_table.setStyle(TableStyle([
             ('FONTNAME', (0, 0), (-1, -1), self._get_font()),
             ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
             ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('ALIGN', (2, 1), (2, -1), 'LEFT'),  # Naziv na levu stranu
             ('FONTNAME', (0, 0), (-1, 0), self._get_font(bold=True)),
             ('FONTSIZE', (0, 0), (-1, 0), 9),
             ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
@@ -225,11 +260,11 @@ class PDFGenerator:
         elements.append(item_table)
         elements.append(Spacer(1, 0.5*cm))
         
-        # Ukupno
+        # Ukupno - SA NOVIM PODACIMA
         total_data = [
             ['Ukupan iznos:', f"{proforma['total_amount']:,.2f} RSD"],
-            ['Plaćeno:', f"{proforma['paid_amount']:,.2f} RSD"],
-            ['Preostalo:', f"{proforma['total_amount'] - proforma['paid_amount']:,.2f} RSD"]
+            ['Plaćeno:', f"{total_paid:,.2f} RSD"],
+            ['Preostalo:', f"{remaining:,.2f} RSD"]
         ]
         
         total_table = Table(total_data, colWidths=[14*cm, 4*cm])
@@ -242,6 +277,13 @@ class PDFGenerator:
             ('LINEABOVE', (0, -1), (-1, -1), 2, colors.black),
         ]))
         elements.append(total_table)
+        
+        # Ako postoji poslednja uplata, dodaj info
+        if last_payment_date:
+            elements.append(Spacer(1, 0.3*cm))
+            payment_info = f"<i>Poslednja uplata: {last_payment_date}</i>"
+            elements.append(Paragraph(payment_info, normal_style))
+        
         elements.append(Spacer(1, 1.5*cm))
         
         # Potpisi

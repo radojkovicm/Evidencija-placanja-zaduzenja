@@ -502,6 +502,7 @@ class ArticleDialog:
         
         ttk.Label(form_frame, text="Cena (RSD):").grid(row=row, column=0, sticky=tk.W, pady=5)
         self.price_entry = ttk.Entry(form_frame, width=40)
+        self.price_entry.insert(0, "0")
         self.price_entry.grid(row=row, column=1, pady=5, sticky=tk.EW)
         row += 1
         

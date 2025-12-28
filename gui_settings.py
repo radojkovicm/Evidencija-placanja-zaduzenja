@@ -77,7 +77,6 @@ class SettingsWindow:
 
         self.email_minute_spinbox = ttk.Spinbox(time_frame, from_=0, to=59, width=5, format="%02.0f")
         self.email_minute_spinbox.pack(side=tk.LEFT)
-        self.email_minite_label = ttk.Label(time_frame, text="(format: HH:MM)")
         self.email_minute_spinbox.set("00")
         ttk.Label(time_frame, text="(format: HH:MM)").pack(side=tk.LEFT, padx=10)
         row += 1
