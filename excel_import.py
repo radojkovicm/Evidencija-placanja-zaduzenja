@@ -146,7 +146,7 @@ class ExcelImporter:
                 
                 notes = str(row.get('Napomena', '')).strip()
                 
-                self.db.add_article(
+                self.db.upsert_article(
                     article_code=article_code,
                     name=name,
                     unit=unit,
@@ -154,6 +154,7 @@ class ExcelImporter:
                     discount=discount,
                     notes=notes
                 )
+
                 
                 success_count += 1
             

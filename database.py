@@ -618,6 +618,56 @@ class Database:
         self.conn.commit()
         return cursor.lastrowid
     
+    def upsert_article(self, **kwargs):
+        """
+        Dodaje ili ažurira artikal na osnovu article_code.
+        Koristi se za Excel uvoz.
+        """
+        article_code = (kwargs.get('article_code') or '').strip()
+        if not article_code:
+            return None
+
+        existing = self.get_article_by_code(article_code)
+
+        cursor = self.conn.cursor()
+
+        if existing:
+            # UPDATE
+            cursor.execute('''
+                UPDATE articles
+                SET name = ?,
+                    unit = ?,
+                    price = ?,
+                    discount = ?,
+                    notes = ?
+                WHERE article_code = ?
+            ''', (
+                kwargs.get('name', existing['name']),
+                kwargs.get('unit', existing['unit']),
+                kwargs.get('price', existing['price']),
+                kwargs.get('discount', existing['discount']),
+                kwargs.get('notes', existing['notes']),
+                article_code
+            ))
+            self.conn.commit()
+            return existing['id']
+        else:
+            # INSERT
+            cursor.execute('''
+                INSERT INTO articles (article_code, name, unit, price, discount, notes)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (
+                article_code,
+                kwargs.get('name'),
+                kwargs.get('unit', 'kom'),
+                kwargs.get('price', 0),
+                kwargs.get('discount', 0),
+                kwargs.get('notes', '')
+            ))
+            self.conn.commit()
+            return cursor.lastrowid
+
+    
     def get_all_articles(self):
         cursor = self.conn.cursor()
         cursor.execute("SELECT * FROM articles ORDER BY name COLLATE NOCASE")
