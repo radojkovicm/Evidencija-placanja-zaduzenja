@@ -192,6 +192,10 @@ class Database:
                 entry_date TEXT NOT NULL,
                 date_from TEXT NOT NULL,
                 date_to TEXT NOT NULL,
+                cash REAL DEFAULT 0,
+                card REAL DEFAULT 0,
+                wire REAL DEFAULT 0,
+                checks REAL DEFAULT 0,
                 amount REAL NOT NULL,
                 notes TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
@@ -217,6 +221,18 @@ class Database:
             cursor.execute("ALTER TABLE invoices ADD COLUMN vendor_id INTEGER")
         if 'vendor_name' not in invoice_cols:
             cursor.execute("ALTER TABLE invoices ADD COLUMN vendor_name TEXT")
+        
+        # Proveri revenue_entries tabelu
+        cursor.execute("PRAGMA table_info(revenue_entries)")
+        revenue_cols = [row['name'] for row in cursor.fetchall()]
+        if 'cash' not in revenue_cols:
+            cursor.execute("ALTER TABLE revenue_entries ADD COLUMN cash REAL DEFAULT 0")
+        if 'card' not in revenue_cols:
+            cursor.execute("ALTER TABLE revenue_entries ADD COLUMN card REAL DEFAULT 0")
+        if 'wire' not in revenue_cols:
+            cursor.execute("ALTER TABLE revenue_entries ADD COLUMN wire REAL DEFAULT 0")
+        if 'checks' not in revenue_cols:
+            cursor.execute("ALTER TABLE revenue_entries ADD COLUMN checks REAL DEFAULT 0")
         
         self.conn.commit()
     
@@ -815,12 +831,16 @@ class Database:
     def add_revenue_entry(self, **kwargs):
         cursor = self.conn.cursor()
         cursor.execute('''
-            INSERT INTO revenue_entries (entry_date, date_from, date_to, amount, notes)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO revenue_entries (entry_date, date_from, date_to, cash, card, wire, checks, amount, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             kwargs['entry_date'],
             kwargs['date_from'],
             kwargs['date_to'],
+            kwargs.get('cash', 0),
+            kwargs.get('card', 0),
+            kwargs.get('wire', 0),
+            kwargs.get('checks', 0),
             kwargs['amount'],
             kwargs.get('notes', '')
         ))

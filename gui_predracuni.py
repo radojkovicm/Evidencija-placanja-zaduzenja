@@ -28,6 +28,7 @@ class PredracuniTab:
         ttk.Button(toolbar, text="Plati", command=self.pay_proforma).pack(side=tk.LEFT, padx=2)
         ttk.Button(toolbar, text="Izmeni", command=self.edit_proforma).pack(side=tk.LEFT, padx=2)
         ttk.Button(toolbar, text="Arhiviraj", command=self.archive_proforma).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="Obriši", command=self.delete_proforma).pack(side=tk.LEFT, padx=2)
         ttk.Separator(toolbar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=5)
         ttk.Button(toolbar, text="Kupci", command=self.open_customers).pack(side=tk.LEFT, padx=2)
         ttk.Button(toolbar, text="Artikli", command=self.open_articles).pack(side=tk.LEFT, padx=2)
@@ -182,6 +183,23 @@ class PredracuniTab:
         tags = self.tree.item(selection[0])['tags']
         proforma_id = tags[-1]
         ProformaEditDialog(self.parent, self.db, proforma_id, self.load_proformas)
+
+    def delete_proforma(self):
+        selection = self.tree.selection()
+        if not selection:
+            messagebox.showwarning("Upozorenje", "Molim izaberite predračun za brisanje.")
+            return
+        
+        tags = self.tree.item(selection[0])['tags']
+        proforma_id = tags[-1]
+        
+        if messagebox.askyesno("Potvrda", "Da li ste sigurni da želite da obrišete ovaj predračun?\n\nOvo će obrisati i sve uplate vezane za ovaj predračun."):
+            try:
+                self.db.delete_proforma(proforma_id)
+                messagebox.showinfo("Uspeh", "Predračun je uspešno obrisan.")
+                self.load_proformas()
+            except Exception as e:
+                messagebox.showerror("Greška", f"Greška pri brisanju: {str(e)}")
     
     def archive_proforma(self):
         selection = self.tree.selection()
