@@ -152,7 +152,7 @@ try:
                 
                 # Tab 3: Plaćanje komunalija
                 komunalije_frame = ttk.Frame(notebook)
-                notebook.add(komunalije_frame, text="Plaćanje komunalija")
+                notebook.add(komunalije_frame, text="Plaćanje troškova")
                 self.komunalije_tab = KomunalijeTab(komunalije_frame, self.db)
                 
                 # Tab 4: Kontrola prometa

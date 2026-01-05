@@ -49,6 +49,16 @@ class SettingsWindow:
         ttk.Label(general_frame, text="Logo firme:").grid(row=row, column=0, sticky=tk.W, pady=5)
         logo_frame = ttk.Frame(general_frame)
         logo_frame.grid(row=row, column=1, pady=5, sticky=tk.EW)
+        
+        ttk.Label(general_frame, text="PIB:").grid(row=row, column=0, sticky=tk.W, pady=5)
+        self.company_pib_entry = ttk.Entry(general_frame, width=40)
+        self.company_pib_entry.grid(row=row, column=1, pady=5, sticky=tk.EW)
+        row += 1
+
+        ttk.Label(general_frame, text="Broj računa:").grid(row=row, column=0, sticky=tk.W, pady=5)
+        self.company_bank_account_entry = ttk.Entry(general_frame, width=40)
+        self.company_bank_account_entry.grid(row=row, column=1, pady=5, sticky=tk.EW)
+        row += 1
 
         self.logo_label = ttk.Label(logo_frame, text="Nije izabran")
         self.logo_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
@@ -309,6 +319,8 @@ class SettingsWindow:
 
         self.company_name_entry.insert(0, settings.get("company_name", ""))
         self.company_address_entry.insert(0, settings.get("company_address", ""))
+        self.company_pib_entry.insert(0, settings.get('company_pib', ''))
+        self.company_bank_account_entry.insert(0, settings.get('company_bank_account', ''))
 
         logo_path = settings.get("logo_path", "")
         if logo_path and os.path.exists(logo_path):
@@ -452,6 +464,8 @@ class SettingsWindow:
             "company_name": self.company_name_entry.get().strip(),
             "company_address": self.company_address_entry.get().strip(),
             "logo_path": self.logo_path if self.logo_path else "",
+            "company_pib": self.company_pib_entry.get().strip(),  
+            "company_bank_account": self.company_bank_account_entry.get().strip(),
             "notification_days": notification_days,
             "email_notification_time": email_time,
             "default_sort": self.default_sort_combo.get(),

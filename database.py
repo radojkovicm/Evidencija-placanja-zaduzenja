@@ -12,6 +12,28 @@ class Database:
         self.create_tables()
         self._ensure_all_columns()
         self._ensure_vendor_codes()
+        
+        try:
+            cursor = self.conn.cursor()  
+            cursor.execute('ALTER TABLE revenue_entries ADD COLUMN period_type TEXT DEFAULT "Custom"')
+            self.conn.commit()
+        except:
+            pass  # Kolona već postoji
+        
+        # Migracija: Dodaj payment_status i payment_date kolone ako ne postoje
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('ALTER TABLE revenue_entries ADD COLUMN payment_status TEXT DEFAULT "Neplaćeno"')
+            self.conn.commit()
+        except:
+            pass  # Kolona već postoji
+
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('ALTER TABLE revenue_entries ADD COLUMN payment_date TEXT')
+            self.conn.commit()
+        except:
+            pass  # Kolona već postoji
     
     def connect(self):
         try:
@@ -905,6 +927,57 @@ class Database:
     def delete_revenue_entry(self, entry_id):
         cursor = self.conn.cursor()
         cursor.execute('DELETE FROM revenue_entries WHERE id = ?', (entry_id,))
+        self.conn.commit()
+        
+    # U sekciji REVENUE ENTRY METHODS, dodaj:
+
+    def mark_revenue_as_paid(self, entry_id, payment_date):
+        """Označi unos prometa kao plaćen"""
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            UPDATE revenue_entries 
+            SET payment_status = 'Plaćeno',
+                payment_date = ?
+            WHERE id = ?
+        ''', (payment_date, entry_id))
+        self.conn.commit()
+        
+    def get_revenue_entry_by_id(self, entry_id):
+        """Vraća jedan unos prometa po ID-u"""
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT * FROM revenue_entries WHERE id = ?', (entry_id,))
+        row = cursor.fetchone()
+        if row:
+            return dict(row)
+        return None
+
+    def update_revenue_entry(self, entry_id, **kwargs):
+        """Ažurira postojeći unos prometa (NE dira payment_status)"""
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            UPDATE revenue_entries 
+            SET entry_date = ?, 
+                date_from = ?, 
+                date_to = ?, 
+                cash = ?,
+                card = ?,
+                wire = ?,
+                checks = ?,
+                amount = ?, 
+                notes = ?
+            WHERE id = ?
+        ''', (
+            kwargs['entry_date'],
+            kwargs['date_from'],
+            kwargs['date_to'],
+            kwargs.get('cash', 0),
+            kwargs.get('card', 0),
+            kwargs.get('wire', 0),
+            kwargs.get('checks', 0),
+            kwargs['amount'],
+            kwargs.get('notes', ''),
+            entry_id
+        ))
         self.conn.commit()
     
     # ==================== SETTINGS & STATS ====================
