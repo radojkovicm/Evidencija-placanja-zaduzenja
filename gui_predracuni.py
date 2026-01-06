@@ -128,6 +128,9 @@ class PredracuniTab:
             status = self.db.get_payment_status_proforma(proforma_id)
             last_payment_date = self.db.get_last_payment_date_proforma(proforma_id) or "-"
             
+            notes = proforma['notes'] or ''
+            notes_display = notes[:50] + '...' if len(notes) > 50 else notes
+
             item_id = self.tree.insert('', tk.END, values=(
                 proforma['proforma_number'],
                 proforma['invoice_date'],
@@ -137,7 +140,7 @@ class PredracuniTab:
                 f"{remaining:,.2f}",
                 status,
                 last_payment_date,
-                proforma['notes'] or ''
+                notes_display
             ), tags=(proforma['id'],))
             
             # Oboji red
@@ -336,13 +339,21 @@ class ProformaPaymentDialog:
         # Items frame - tabela stavki
         items_frame = ttk.LabelFrame(main_frame, text=" 📦 Stavke predračuna ", padding=10)
         items_frame.grid(row=0, column=0, sticky='ew', pady=(0, 10))
-        
-        columns = ('Šifra', 'Naziv', 'Količina', 'JM', 'Cena', 'Popust %', 'Ukupno')
-        self.items_tree = ttk.Treeview(items_frame, columns=columns, show='headings', height=6)
-        
+
+        # Toolbar za stavke
+        items_toolbar = ttk.Frame(items_frame)
+        items_toolbar.pack(side=tk.TOP, fill=tk.X, pady=(0, 5))
+
+        ttk.Button(items_toolbar, text="✓ Plaćeno", command=self.toggle_item_paid).pack(side=tk.LEFT, padx=2)
+        ttk.Button(items_toolbar, text="Osveži", command=self.load_items).pack(side=tk.LEFT, padx=2)
+
+        # Dodaj kolonu "Status"
+        columns = ('Šifra', 'Naziv', 'Količina', 'JM', 'Cena', 'Popust %', 'Ukupno', 'Status')
+        self.items_tree = ttk.Treeview(items_frame, columns=columns, show='headings', height=6, selectmode='browse')
+
         for col in columns:
             self.items_tree.heading(col, text=col)
-        
+
         self.items_tree.column('Šifra', width=80)
         self.items_tree.column('Naziv', width=250)
         self.items_tree.column('Količina', width=80)
@@ -350,9 +361,13 @@ class ProformaPaymentDialog:
         self.items_tree.column('Cena', width=100)
         self.items_tree.column('Popust %', width=80)
         self.items_tree.column('Ukupno', width=100)
-        
+        self.items_tree.column('Status', width=80)  # Nova kolona
+
         scrollbar_items = ttk.Scrollbar(items_frame, orient=tk.VERTICAL, command=self.items_tree.yview)
         self.items_tree.configure(yscroll=scrollbar_items.set)
+
+        self.items_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar_items.pack(side=tk.RIGHT, fill=tk.Y)
         
         self.items_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar_items.pack(side=tk.RIGHT, fill=tk.Y)
@@ -404,8 +419,15 @@ class ProformaPaymentDialog:
             
             row += 1
             ttk.Label(right_frame, text="Napomena:").grid(row=row, column=0, sticky=tk.NW, pady=5)
-            self.notes_entry = tk.Text(right_frame, width=40, height=3)
+            self.notes_entry = tk.Text(right_frame, width=40, height=1, wrap=tk.WORD)
             self.notes_entry.grid(row=row, column=1, columnspan=3, padx=5, sticky=tk.EW)
+
+            # Automatsko prilagođavanje visine
+            def adjust_height(event=None):
+                lines = int(self.notes_entry.index('end-1c').split('.')[0])
+                self.notes_entry.config(height=max(3, min(lines, 10)))  # Min 3, max 10 redova
+
+            self.notes_entry.bind('<KeyRelease>', adjust_height)
             
             # Dugmadi desno od polja
             row += 1
@@ -445,13 +467,47 @@ class ProformaPaymentDialog:
         
         self.history_tree.column('Datum', width=100)
         self.history_tree.column('Iznos (RSD)', width=120)
-        self.history_tree.column('Napomena', width=400)
+        self.history_tree.column('Napomena', width=500)
         
         scrollbar = ttk.Scrollbar(history_frame, orient=tk.VERTICAL, command=self.history_tree.yview)
         self.history_tree.configure(yscroll=scrollbar.set)
         
         self.history_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+    def toggle_item_paid(self):
+        """Toggle status plaćenosti izabrane stavke"""
+        selection = self.items_tree.selection()
+        if not selection:
+            messagebox.showwarning("Upozorenje", "Molim izaberite stavku.")
+            return
+        
+        # Uzmi item_id iz tags
+        tags = self.items_tree.item(selection[0])['tags']
+        if not tags:
+            return
+        
+        item_id = tags[0]
+        
+        # Uzmi trenutni status
+        values = self.items_tree.item(selection[0])['values']
+        current_status = values[-1]  # Poslednja kolona je Status
+        
+        # Toggle status
+        new_status = 0 if current_status == 'Plaćeno' else 1
+        
+        try:
+            self.db.mark_proforma_item_paid(item_id, new_status)
+            self.load_items()  # Osveži prikaz
+            
+            # ZAMENI ovu liniju:
+            # self.status_label.config(text=f"Stavka označena kao {status_text}")
+            
+            # SA:
+            status_text = "plaćenom" if new_status == 1 else "neplaćenom"
+            messagebox.showinfo("Uspeh", f"Stavka označena kao {status_text}")
+        except Exception as e:
+            messagebox.showerror("Greška", f"Greška pri označavanju: {str(e)}")
     
     def on_payment_type_changed(self):
         """Hendluj promenu tipa plaćanja"""
@@ -468,18 +524,30 @@ class ProformaPaymentDialog:
         for item in self.items_tree.get_children():
             self.items_tree.delete(item)
         
-        items = self.db.get_proforma_items(self.proforma_id)
+        # Koristi novu metodu koja vraća i ID
+        items = self.db.get_proforma_items_with_id(self.proforma_id)
         
         for item in items:
-            self.items_tree.insert('', tk.END, values=(
+            is_paid = item.get('is_paid', 0)
+            status_text = 'Plaćeno' if is_paid else 'Neplaćeno'
+            
+            item_id = self.items_tree.insert('', tk.END, values=(
                 item['article_code'],
                 item['article_name'],
                 f"{item['quantity']:.2f}",
                 item['unit'],
                 f"{item['price']:,.2f}",
                 f"{item['discount']:.1f}",
-                f"{item['total']:,.2f}"
-            ))
+                f"{item['total']:,.2f}",
+                status_text
+            ), tags=(item['id'],))
+            
+            # Oboji plaćene stavke zeleno
+            if is_paid:
+                self.items_tree.item(item_id, tags=('paid', item['id']))
+        
+        # Dodaj tag konfiguraciju
+        self.items_tree.tag_configure('paid', background='#90EE90')
     
     def load_payments(self):
         """Učitaj istoriju uplata u tabelu"""
@@ -489,10 +557,13 @@ class ProformaPaymentDialog:
         payments = self.db.get_proforma_payments(self.proforma_id)
         
         for payment in payments:
+            notes = payment['notes'] or ''
+            notes_display = notes[:50] + '...' if len(notes) > 50 else notes
+            
             self.history_tree.insert('', tk.END, values=(
                 payment['payment_date'],
                 f"{payment['payment_amount']:,.2f}",
-                payment['notes'] or ''
+                notes_display
             ))
     
     def save_payment(self):
@@ -622,10 +693,16 @@ class ProformaEditDialog:
         self.customer_combo['values'] = list(self.customer_map.keys())
         self.customer_combo.grid(row=row, column=1, columnspan=3, pady=5, sticky=tk.W)
         
-        row += 1
-        ttk.Label(header_frame, text="Napomena:").grid(row=row, column=0, sticky=tk.W, pady=5)
-        self.notes_entry = ttk.Entry(header_frame, width=70)
+        ttk.Label(header_frame, text="Napomena:").grid(row=row, column=0, sticky=tk.NW, pady=5)
+        self.notes_entry = tk.Text(header_frame, width=70, height=1, wrap=tk.WORD)
         self.notes_entry.grid(row=row, column=1, columnspan=3, pady=5, sticky=tk.EW)
+
+        # Automatsko prilagođavanje visine
+        def adjust_height(event=None):
+            lines = int(self.notes_entry.index('end-1c').split('.')[0])
+            self.notes_entry.config(height=max(3, min(lines, 10)))  # Min 3, max 10 redova
+
+        self.notes_entry.bind('<KeyRelease>', adjust_height)
         
         # Items frame
         items_frame = ttk.LabelFrame(self.window, text="Stavke predračuna", padding=10)
@@ -674,11 +751,16 @@ class ProformaEditDialog:
         ttk.Button(button_frame, text="Obriši predračun", command=self.delete_proforma).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="Otkaži", command=self.window.destroy).pack(side=tk.RIGHT)
         ttk.Button(button_frame, text="Sačuvaj izmene", command=self.save).pack(side=tk.RIGHT, padx=5)
+        
+        # Status bar (ako već ne postoji)
+        if not hasattr(self, 'status_label'):
+            self.status_label = ttk.Label(self.window, text="", relief=tk.SUNKEN, anchor=tk.W)
+            self.status_label.grid(row=3, column=0, sticky='ew', padx=15, pady=(0, 10))
     
     def load_data(self):
         self.invoice_date_entry.set_date(datetime.strptime(self.proforma['invoice_date'], '%d.%m.%Y'))
         self.customer_combo.set(self.proforma['customer_name'])
-        self.notes_entry.insert(0, self.proforma['notes'] or '')
+        self.notes_entry.insert('1.0', self.proforma['notes'] or '')
         self.refresh_items()
     
     def add_item(self):
@@ -739,7 +821,7 @@ class ProformaEditDialog:
         customer_name = self.customer_combo.get()
         customer_id = self.customer_map.get(customer_name)
         invoice_date = self.invoice_date_entry.get_date().strftime('%d.%m.%Y')
-        notes = self.notes_entry.get().strip()
+        notes = self.notes_entry.get('1.0', tk.END).strip()
         
         total_amount = sum(item['total'] for item in self.items)
         
@@ -765,12 +847,13 @@ class ItemDialog:
     def __init__(self, parent, db, callback):
         self.window = tk.Toplevel(parent)
         self.window.title("Dodaj stavku")
-        self.window.geometry("550x400")
+        self.window.geometry("550x500")
         self.window.transient(parent)
         self.window.grab_set()
         
         self.db = db
         self.callback = callback
+        self.search_results = []
         
         self.setup_ui()
     
@@ -780,16 +863,33 @@ class ItemDialog:
         
         row = 0
         
-        # Pretraga po šifri
-        ttk.Label(form_frame, text="Šifra artikla:").grid(row=row, column=0, sticky=tk.W, pady=5)
+        # Pretraga po šifri ili imenu
+        ttk.Label(form_frame, text="Šifra/Naziv:").grid(row=row, column=0, sticky=tk.W, pady=5)
         search_frame = ttk.Frame(form_frame)
         search_frame.grid(row=row, column=1, pady=5, sticky=tk.EW)
         
         self.code_entry = ttk.Entry(search_frame, width=20)
         self.code_entry.pack(side=tk.LEFT, padx=(0, 5))
-        self.code_entry.bind('<Return>', lambda e: self.find_by_code())
+        self.code_entry.bind('<Return>', lambda e: self.find_articles())
         
-        ttk.Button(search_frame, text="Pronađi", command=self.find_by_code).pack(side=tk.LEFT)
+        ttk.Button(search_frame, text="Pronađi", command=self.find_articles).pack(side=tk.LEFT)
+        row += 1
+        
+        # Dropdown za rezultate pretrage
+        self.results_frame = ttk.Frame(form_frame)
+        self.results_frame.grid(row=row, column=1, pady=5, sticky=tk.EW)
+        
+        self.results_listbox = tk.Listbox(self.results_frame, height=8, width=47)
+        self.results_scrollbar = ttk.Scrollbar(self.results_frame, orient=tk.VERTICAL, command=self.results_listbox.yview)
+        self.results_listbox.config(yscrollcommand=self.results_scrollbar.set)
+        
+        self.results_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.results_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.results_listbox.bind('<<ListboxSelect>>', self.on_search_result_selected)
+        self.results_listbox.bind('<Double-Button-1>', lambda e: self.on_search_result_selected(e, auto_add=False))
+        
+        self.results_frame.grid_remove()  # Sakrij na početku
         row += 1
         
         ttk.Label(form_frame, text="ILI", font=('Arial', 9, 'italic')).grid(row=row, column=0, columnspan=2, pady=5)
@@ -848,46 +948,85 @@ class ItemDialog:
         ttk.Button(button_frame, text="Dodaj", command=self.add).pack(side=tk.RIGHT, padx=5)
         ttk.Button(button_frame, text="Otkaži", command=self.window.destroy).pack(side=tk.RIGHT)
     
-    def find_by_code(self):
-        code = self.code_entry.get().strip()
-        if not code:
+    def find_articles(self):
+        """Pretražuje artikle po šifri ili imenu"""
+        search_term = self.code_entry.get().strip()
+        
+        if len(search_term) < 3:
+            messagebox.showwarning("Pretraga", "Molim unesite minimum 3 karaktera za pretragu.")
+            self.results_frame.grid_remove()
             return
         
-        article = self.db.get_article_by_code(code)
-        if article:
-            # Popuni podatke
-            self.unit_entry.delete(0, tk.END)
-            self.unit_entry.insert(0, article['unit'])
-            self.price_entry.delete(0, tk.END)
-            self.price_entry.insert(0, str(article['price']))
-            self.discount_entry.delete(0, tk.END)
-            self.discount_entry.insert(0, str(article['discount']))
-            
-            # Selektuj u combo
-            key = f"{article['article_code']} - {article['name']}"
-            if key in self.article_map:
-                self.article_combo.set(key)
-            
-            self.calculate_total()
-            messagebox.showinfo("Pronađeno", f"Artikal: {article['name']}")
+        self.search_results = self.db.search_articles(search_term)
+        
+        # Očisti listu
+        self.results_listbox.delete(0, tk.END)
+        
+        if not self.search_results:
+            messagebox.showinfo("Pretraga", f"Nisu pronađeni artikli sa '{search_term}'.")
+            self.results_frame.grid_remove()
+            return
+        
+        if len(self.search_results) == 1:
+            # Ako je samo jedan rezultat, automatski popuni
+            self.populate_article_data(self.search_results[0])
+            self.results_frame.grid_remove()
+            messagebox.showinfo("Pronađeno", f"Artikal: {self.search_results[0]['name']}")
         else:
-            messagebox.showwarning("Nije pronađeno", f"Artikal sa šifrom '{code}' nije pronađen.")
+            # Prikaži dropdown sa rezultatima
+            for article in self.search_results:
+                display_text = f"{article['article_code']} - {article['name']}"
+                self.results_listbox.insert(tk.END, display_text)
+            
+            self.results_frame.grid()
+    
+    def on_search_result_selected(self, event, auto_add=True):
+        """Kada korisnik izabere artikal iz rezultata pretrage"""
+        selection = self.results_listbox.curselection()
+        if not selection:
+            return
+        
+        index = selection[0]
+        article = self.search_results[index]
+        
+        self.populate_article_data(article)
+        self.results_frame.grid_remove()
+        
+        # Postavi fokus na količinu
+        self.quantity_entry.focus()
+    
+    def populate_article_data(self, article):
+        """Popunjava formu podacima o artiklu"""
+        # Popuni šifru
+        self.code_entry.delete(0, tk.END)
+        self.code_entry.insert(0, article['article_code'])
+        
+        # Popuni jedinicu, cenu i popust
+        self.unit_entry.delete(0, tk.END)
+        self.unit_entry.insert(0, article['unit'])
+        
+        self.price_entry.delete(0, tk.END)
+        self.price_entry.insert(0, str(article['price']))
+        
+        self.discount_entry.delete(0, tk.END)
+        self.discount_entry.insert(0, str(article['discount']))
+        
+        # Selektuj u combo box
+        key = f"{article['article_code']} - {article['name']}"
+        if key in self.article_map:
+            self.article_combo.set(key)
+        
+        self.calculate_total()
     
     def on_article_selected(self, event):
+        """Kada korisnik izabere artikal iz combo boxa"""
         selected = self.article_combo.get()
         if selected in self.article_map:
             article = self.article_map[selected]
-            self.code_entry.delete(0, tk.END)
-            self.code_entry.insert(0, article['article_code'])
-            self.unit_entry.delete(0, tk.END)
-            self.unit_entry.insert(0, article['unit'])
-            self.price_entry.delete(0, tk.END)
-            self.price_entry.insert(0, str(article['price']))
-            self.discount_entry.delete(0, tk.END)
-            self.discount_entry.insert(0, str(article['discount']))
-            self.calculate_total()
+            self.populate_article_data(article)
     
     def calculate_total(self, event=None):
+        """Izračunava ukupnu cenu"""
         try:
             quantity = float(self.quantity_entry.get().strip().replace(',', '.'))
             price = float(self.price_entry.get().strip().replace(',', '.'))
@@ -902,6 +1041,7 @@ class ItemDialog:
             self.total_label.config(text="0.00 RSD")
     
     def add(self):
+        """Dodaje stavku u predračun"""
         selected = self.article_combo.get()
         if not selected:
             messagebox.showerror("Greška", "Molim izaberite artikal.")
@@ -935,7 +1075,6 @@ class ItemDialog:
         
         self.callback(item)
         self.window.destroy()
-
 
 class ProformaArchiveWindow:
     """Prozor za arhivu predračuna"""
@@ -994,6 +1133,9 @@ class ProformaArchiveWindow:
             status = self.db.get_payment_status_proforma(proforma_id)
             last_payment_date = self.db.get_last_payment_date_proforma(proforma_id) or "-"
             
+            notes = proforma['notes'] or ''
+            notes_display = notes[:50] + '...' if len(notes) > 50 else notes
+
             self.tree.insert('', tk.END, values=(
                 proforma['proforma_number'],
                 proforma['invoice_date'],
@@ -1002,7 +1144,7 @@ class ProformaArchiveWindow:
                 f"{total_paid:,.2f}",
                 status,
                 last_payment_date,
-                proforma['notes'] or ''
+                notes_display
             ), tags=(proforma['id'],))
     
     def unarchive(self):
@@ -1114,9 +1256,16 @@ class ProformaDialog:
         self.customer_combo.grid(row=row, column=3, pady=5, sticky=tk.W)
         
         row += 1
-        ttk.Label(header_frame, text="Napomena:").grid(row=row, column=0, sticky=tk.W, pady=5)
-        self.notes_entry = ttk.Entry(header_frame, width=70)
+        ttk.Label(header_frame, text="Napomena:").grid(row=row, column=0, sticky=tk.NW, pady=5)
+        self.notes_entry = tk.Text(header_frame, width=70, height=1, wrap=tk.WORD)
         self.notes_entry.grid(row=row, column=1, columnspan=3, pady=5, sticky=tk.EW)
+
+        # Automatsko prilagođavanje visine
+        def adjust_height(event=None):
+            lines = int(self.notes_entry.index('end-1c').split('.')[0])
+            self.notes_entry.config(height=max(3, min(lines, 10)))  # Min 3, max 10 redova
+
+        self.notes_entry.bind('<KeyRelease>', adjust_height)
         
         # Items frame
         items_frame = ttk.LabelFrame(self.window, text="Stavke predračuna", padding=10)
@@ -1181,9 +1330,9 @@ class ProformaDialog:
             self.customer_combo.set(customer_name)
             
             # Postavi napomenu
-            self.notes_entry.delete(0, tk.END)
+            self.notes_entry.delete('1.0', tk.END)
             if self.proforma.get('notes'):
-                self.notes_entry.insert(0, self.proforma['notes'])
+                self.notes_entry.insert('1.0', self.proforma['notes'])
             
             # Prikaži stavke
             self.refresh_items()
@@ -1241,7 +1390,7 @@ class ProformaDialog:
         customer_name = self.customer_combo.get()
         customer_id = self.customer_map.get(customer_name)
         invoice_date = self.invoice_date_entry.get_date().strftime('%d.%m.%Y')
-        notes = self.notes_entry.get().strip()
+        notes = self.notes_entry.get('1.0', tk.END).strip()
         
         total_amount = sum(item['total'] for item in self.items)
         

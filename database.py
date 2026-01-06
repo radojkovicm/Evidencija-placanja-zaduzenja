@@ -13,6 +13,8 @@ class Database:
         self._ensure_all_columns()
         self._ensure_vendor_codes()
         
+        self.migrate_add_is_paid_to_items()
+        
         try:
             cursor = self.conn.cursor()  
             cursor.execute('ALTER TABLE revenue_entries ADD COLUMN period_type TEXT DEFAULT "Custom"')
@@ -1098,6 +1100,56 @@ class Database:
         row = cursor.fetchone()
         return dict(row) if row else None
     
+    def search_articles(self, search_term):
+        """Pretražuje artikle po šifri ili imenu (min 3 karaktera, case-insensitive)"""
+        if len(search_term) < 3:
+            return []
+        
+        cursor = self.conn.cursor()
+        search_pattern = f"%{search_term.lower()}%"
+        
+        cursor.execute('''
+            SELECT * FROM articles 
+            WHERE LOWER(article_code) LIKE ? OR LOWER(name) LIKE ?
+            ORDER BY article_code
+        ''', (search_pattern, search_pattern))
+        
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+    
+    def mark_proforma_item_paid(self, item_id, is_paid):
+        """Označi stavku kao plaćenu/neplaćenu"""
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            UPDATE proforma_items 
+            SET is_paid = ? 
+            WHERE id = ?
+        ''', (is_paid, item_id))
+        self.conn.commit()
+        
+    def migrate_add_is_paid_to_items(self):
+        """Migracija: Dodaj kolonu is_paid u proforma_items"""
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute("ALTER TABLE proforma_items ADD COLUMN is_paid INTEGER DEFAULT 0")
+            self.conn.commit()
+            print("Migracija: Dodata kolona is_paid")
+        except Exception as e:
+            # Kolona već postoji
+            pass
+
+    def get_proforma_items_with_id(self, proforma_id):
+        """Vrati stavke sa ID-em (potrebno za označavanje)"""
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            SELECT id, article_code, article_name, quantity, unit, price, discount, total, is_paid
+            FROM proforma_items 
+            WHERE proforma_id = ?
+            ORDER BY id
+        ''', (proforma_id,))
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+        
     def update_proforma_invoice(self, proforma_id, proforma_data, items):
         """Ažurira predračun i njegove stavke"""
         cursor = self.conn.cursor()

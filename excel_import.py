@@ -101,7 +101,7 @@ class ExcelImporter:
                 self.tree.insert('', tk.END, values=(
                     row.get('Šifra', ''),
                     row.get('Naziv', ''),
-                    row.get('Jedinica', 'kom'),
+                    row.get('Jedinica', '') or 'kom',
                     f"{row.get('Cena', 0):,.2f}",
                     f"{row.get('Popust', 0):.1f}",
                     row.get('Napomena', '')
@@ -129,7 +129,7 @@ class ExcelImporter:
             try:
                 article_code = str(row.get('Šifra', '')).strip()
                 name = str(row.get('Naziv', '')).strip()
-                unit = str(row.get('Jedinica', 'kom')).strip()
+                unit = str(row.get('Jedinica', '')).strip() or 'kom'
                 
                 if not article_code or not name:
                     raise ValueError("Šifra i naziv su obavezni")
