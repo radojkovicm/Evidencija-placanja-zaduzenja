@@ -707,3 +707,182 @@ class PDFGenerator:
         
         doc.build(elements)
         return filename
+    
+    def _create_company_header(self):
+        """Kreira header sa company info i logom"""
+        elements = []
+
+        settings = self.db.get_settings()
+        company_name = settings.get('company_name', '')
+        company_address = settings.get('company_address', '')
+        company_pib = settings.get('company_pib', '')
+        company_bank_account = settings.get('company_bank_account', '')
+        logo_path = settings.get('logo_path', '')
+
+        if company_name or company_address:
+            logo_image = None
+            if logo_path and os.path.exists(logo_path):
+                try:
+                    from reportlab.platypus import Image
+                    logo_image = Image(logo_path, width=2*cm, height=2*cm)
+                except Exception as e:
+                    print(f"Greška pri učitavanju loga: {e}")
+                    logo_image = None
+
+            company_info_lines = []
+            if company_name:
+                company_info_lines.append(Paragraph(f"<b>{company_name}</b>",
+                    ParagraphStyle('company', fontName=self._get_font(bold=True), fontSize=12, leading=14)))
+            if company_address:
+                company_info_lines.append(Paragraph(company_address,
+                    ParagraphStyle('address', fontName=self._get_font(), fontSize=9, leading=11)))
+            if company_pib:
+                company_info_lines.append(Paragraph(f"PIB: {company_pib}",
+                    ParagraphStyle('pib', fontName=self._get_font(), fontSize=9, leading=11)))
+            if company_bank_account:
+                company_info_lines.append(Paragraph(f"Broj računa: {company_bank_account}",
+                    ParagraphStyle('bank', fontName=self._get_font(), fontSize=9, leading=11)))
+
+            if logo_image:
+                header_table = Table([[company_info_lines, logo_image]], colWidths=[14*cm, 3*cm])
+            else:
+                header_table = Table([[company_info_lines, '']], colWidths=[14*cm, 3*cm])
+
+            header_table.setStyle(TableStyle([
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('ALIGN', (0, 0), (0, 0), 'LEFT'),
+                ('ALIGN', (1, 0), (1, 0), 'RIGHT'),
+            ]))
+
+            elements.append(header_table)
+            elements.append(Spacer(1, 0.5*cm))
+
+        return elements
+
+    # ==================== NARUDŽBINE ====================
+    def generate_order_pdf(self, order_id):
+        """Generiše PDF narudžbine - informativna verzija bez vendor detalja"""
+
+        # Učitaj podatke
+        order = self.db.get_order_by_id(order_id)
+        if not order:
+            print("⚠️ Narudžbina nije pronađena!")
+            return None
+
+        items = self.db.get_order_items(order_id)
+
+        # Kreiraj PDF filename
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f"narudzbenica_{order['order_number']}_{timestamp}.pdf"
+
+        doc = SimpleDocTemplate(filename, pagesize=A4, topMargin=2*cm, bottomMargin=2*cm)
+        elements = []
+
+        title_style, heading_style, normal_style = self._get_styles()
+
+        # ===== 1. HEADER - samo naziv firme i logo (bez PIB i broja računa) =====
+        settings = self.db.get_settings()
+        company_name = settings.get('company_name', '')
+        logo_path = settings.get('logo_path', '')
+
+        if company_name:
+            logo_image = None
+            if logo_path and os.path.exists(logo_path):
+                try:
+                    from reportlab.platypus import Image
+                    logo_image = Image(logo_path, width=2*cm, height=2*cm)
+                except Exception as e:
+                    print(f"Greška pri učitavanju loga: {e}")
+                    logo_image = None
+
+            company_info_lines = []
+            company_info_lines.append(Paragraph(f"<b>{company_name}</b>",
+                ParagraphStyle('company', fontName=self._get_font(bold=True), fontSize=12, leading=14)))
+
+            if logo_image:
+                header_table = Table([[company_info_lines, logo_image]], colWidths=[14*cm, 3*cm])
+            else:
+                header_table = Table([[company_info_lines, '']], colWidths=[14*cm, 3*cm])
+
+            header_table.setStyle(TableStyle([
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('ALIGN', (0, 0), (0, 0), 'LEFT'),
+                ('ALIGN', (1, 0), (1, 0), 'RIGHT'),
+            ]))
+
+            elements.append(header_table)
+            elements.append(Spacer(1, 0.5*cm))
+
+        # ===== 2. NASLOV =====
+        elements.append(Paragraph(f"NARUDŽBINA BR. {order['order_number']}", title_style))
+        elements.append(Spacer(1, 0.3*cm))
+
+        # ===== 3. INFO - samo datum i dobavljač (bez detalja) =====
+        info_data = [
+            ['Datum narudžbine:', order['order_date']],
+            ['Dobavljač:', order['vendor_name']],
+        ]
+
+        if order.get('notes'):
+            info_data.append(['Napomena:', order['notes']])
+
+        info_table = Table(info_data, colWidths=[4*cm, 13*cm])
+        info_table.setStyle(TableStyle([
+            ('FONTNAME', (0, 0), (-1, -1), self._get_font()),
+            ('FONTNAME', (0, 0), (0, -1), self._get_font(bold=True)),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('TOPPADDING', (0, 0), (-1, -1), 5),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+        ]))
+        elements.append(info_table)
+        elements.append(Spacer(1, 0.5*cm))
+
+        # ===== 4. TABELA SA STAVKAMA - BEZ ŠIFRE, SA NAPOMENOM =====
+        item_data = [['Rb.', 'Naziv artikla', 'Količina', 'JM', 'Napomena']]
+
+        for idx, item in enumerate(items, 1):
+            notes_text = item.get('notes', '') or '-'
+
+            item_data.append([
+                str(idx),
+                self._wrap_text(item['article_name'], font_size=9, align=TA_LEFT),
+                f"{item['quantity']:.2f}",
+                item['unit'],
+                self._wrap_text(notes_text, font_size=8, align=TA_LEFT)
+            ])
+
+        # Fallback ako nema stavki
+        if len(item_data) == 1:
+            item_data.append(['–', 'Nema stavki u narudžbini', '–', '–', '–'])
+
+        item_table = Table(item_data, colWidths=[1.5*cm, 7*cm, 2*cm, 1.5*cm, 6*cm])
+        item_table.setStyle(TableStyle([
+            ('FONTNAME', (0, 0), (-1, -1), self._get_font()),
+            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('ALIGN', (1, 1), (1, -1), 'LEFT'),
+            ('ALIGN', (4, 1), (4, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, 0), self._get_font(bold=True)),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+            ('TOPPADDING', (0, 1), (-1, -1), 5),
+            ('BOTTOMPADDING', (0, 1), (-1, -1), 5),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.white),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('FONTSIZE', (0, 1), (-1, -1), 9),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ]))
+        elements.append(item_table)
+
+        # Build PDF
+        try:
+            doc.build(elements)
+            print(f"✓ PDF narudžbine kreiran: {filename}")
+            return filename
+        except Exception as e:
+            print(f"✗ Greška pri kreiranju PDF-a: {e}")
+            import traceback
+            traceback.print_exc()
+            return None

@@ -13,6 +13,7 @@ try:
     from gui_predracuni import PredracuniTab
     from gui_komunalije import KomunalijeTab
     from gui_promet import PrometTab
+    from gui_narucivanja import NarucivanjeTab
     from system_tray import SystemTrayApp
     
     class EmailScheduler:
@@ -90,6 +91,7 @@ try:
             self.predracuni_tab = None
             self.komunalije_tab = None
             self.promet_tab = None
+            self.narucivanje_tab = None
         
         def show_window(self):
             if self.root:
@@ -159,7 +161,12 @@ try:
                 promet_frame = ttk.Frame(notebook)
                 notebook.add(promet_frame, text="Kontrola prometa")
                 self.promet_tab = PrometTab(promet_frame, self.db)
-                
+
+                # Tab 5: Naručivanje robe
+                narucivanje_frame = ttk.Frame(notebook)
+                notebook.add(narucivanje_frame, text="Naručivanje robe")
+                self.narucivanje_tab = NarucivanjeTab(narucivanje_frame, self.db)
+
                 # Postavi handler za zatvaranje
                 self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
                 

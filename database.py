@@ -225,13 +225,58 @@ class Database:
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-        
+
+        # ==================== TABELE ZA NARUDŽBINE ====================
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                order_number TEXT UNIQUE NOT NULL,
+                order_date TEXT NOT NULL,
+                vendor_id INTEGER,
+                vendor_name TEXT NOT NULL,
+                notes TEXT,
+                is_archived INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (vendor_id) REFERENCES vendors(id)
+            )
+        ''')
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS order_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                order_id INTEGER NOT NULL,
+                article_id INTEGER,
+                article_code TEXT,
+                article_name TEXT NOT NULL,
+                quantity REAL NOT NULL,
+                unit TEXT,
+                notes TEXT,
+                FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE,
+                FOREIGN KEY (article_id) REFERENCES articles(id)
+            )
+        ''')
+
+        # Indeksi za performanse
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_orders_vendor ON orders(vendor_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_orders_date ON orders(order_date)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id)')
+
         self.conn.commit()
         print("All tables ensured.")
     
     def _ensure_all_columns(self):
         cursor = self.conn.cursor()
-        
+
+        # ==================== MIGRACIJA: order_items.notes ====================
+        cursor.execute("PRAGMA table_info(order_items)")
+        order_items_columns = {row['name'] for row in cursor.fetchall()}
+
+        if 'notes' not in order_items_columns:
+            print("Adding 'notes' column to order_items table...")
+            cursor.execute('ALTER TABLE order_items ADD COLUMN notes TEXT')
+            self.conn.commit()
+            print("✓ Column 'notes' added to order_items")
+
         # Proveri vendors tabelu
         cursor.execute("PRAGMA table_info(vendors)")
         vendor_cols = [row['name'] for row in cursor.fetchall()]
@@ -1196,7 +1241,132 @@ class Database:
         cursor = self.conn.cursor()
         cursor.execute('UPDATE proforma_invoices SET is_archived = 0 WHERE id = ?', (proforma_id,))
         self.conn.commit()
-    
+
+    # ==================== ORDER METHODS (NARUDŽBINE) ====================
+
+    def _generate_next_order_number(self):
+        """Generisanje sledećeg broja narudžbine: NAR-0001, NAR-0002..."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT order_number FROM orders ORDER BY id DESC LIMIT 1")
+        row = cursor.fetchone()
+        if row:
+            last_num = row['order_number'].split('-')[-1]
+            if last_num.isdigit():
+                return f"NAR-{int(last_num) + 1:04d}"
+        return "NAR-0001"
+
+    def add_order(self, order_data, items):
+        """Kreiranje nove narudžbine sa stavkama"""
+        cursor = self.conn.cursor()
+        order_number = self._generate_next_order_number()
+
+        cursor.execute('''
+            INSERT INTO orders (order_number, order_date, vendor_id, vendor_name, notes)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (
+            order_number,
+            order_data['order_date'],
+            order_data.get('vendor_id'),
+            order_data['vendor_name'],
+            order_data.get('notes', '')
+        ))
+        order_id = cursor.lastrowid
+
+        # Dodaj stavke
+        for item in items:
+            cursor.execute('''
+                INSERT INTO order_items (order_id, article_id, article_code, article_name, quantity, unit, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                order_id,
+                item.get('article_id'),
+                item.get('article_code', ''),
+                item['article_name'],
+                item['quantity'],
+                item.get('unit', 'kom'),
+                item.get('notes', '')
+            ))
+
+        self.conn.commit()
+        return order_id
+
+    def get_all_orders(self, include_archived=False):
+        """Lista narudžbina (sa opcijom arhive)"""
+        cursor = self.conn.cursor()
+        if include_archived:
+            cursor.execute('SELECT * FROM orders ORDER BY order_date DESC')
+        else:
+            cursor.execute('SELECT * FROM orders WHERE is_archived = 0 ORDER BY order_date DESC')
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_order_by_id(self, order_id):
+        """Jedna narudžbina po ID-u"""
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT * FROM orders WHERE id = ?', (order_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def get_order_items(self, order_id):
+        """Stavke narudžbine"""
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT * FROM order_items WHERE order_id = ?', (order_id,))
+        return [dict(row) for row in cursor.fetchall()]
+
+    def update_order(self, order_id, order_data, items):
+        """Izmena narudžbine"""
+        cursor = self.conn.cursor()
+
+        # Ažuriraj header
+        cursor.execute('''
+            UPDATE orders
+            SET order_date = ?, vendor_id = ?, vendor_name = ?, notes = ?
+            WHERE id = ?
+        ''', (
+            order_data['order_date'],
+            order_data.get('vendor_id'),
+            order_data['vendor_name'],
+            order_data.get('notes', ''),
+            order_id
+        ))
+
+        # Obriši stare stavke
+        cursor.execute('DELETE FROM order_items WHERE order_id = ?', (order_id,))
+
+        # Dodaj nove stavke
+        for item in items:
+            cursor.execute('''
+                INSERT INTO order_items (order_id, article_id, article_code, article_name, quantity, unit, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                order_id,
+                item.get('article_id'),
+                item.get('article_code', ''),
+                item['article_name'],
+                item['quantity'],
+                item.get('unit', 'kom'),
+                item.get('notes', '')
+            ))
+
+        self.conn.commit()
+
+    def archive_order(self, order_id):
+        """Arhiviranje narudžbine"""
+        cursor = self.conn.cursor()
+        cursor.execute('UPDATE orders SET is_archived = 1 WHERE id = ?', (order_id,))
+        self.conn.commit()
+
+    def unarchive_order(self, order_id):
+        """Vraćanje narudžbine iz arhive"""
+        cursor = self.conn.cursor()
+        cursor.execute('UPDATE orders SET is_archived = 0 WHERE id = ?', (order_id,))
+        self.conn.commit()
+
+    def delete_order(self, order_id):
+        """Brisanje narudžbine (CASCADE briše i stavke)"""
+        cursor = self.conn.cursor()
+        cursor.execute('DELETE FROM orders WHERE id = ?', (order_id,))
+        self.conn.commit()
+
     def __del__(self):
         if self.conn:
             try:
