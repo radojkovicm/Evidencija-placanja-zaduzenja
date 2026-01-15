@@ -60,6 +60,9 @@ class GmailOAuthHelper:
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
                 creds.refresh(Request())
+                # Save the refreshed token back to file
+                with open(token_path, "w", encoding="utf-8") as token_file:
+                    token_file.write(creds.to_json())
             else:
                 creds = GmailOAuthHelper.authorize(credentials_path, token_path)
 
